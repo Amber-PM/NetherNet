@@ -1,0 +1,46 @@
+{
+    "name": "amber-pm/nethernet",
+    "description": "Transport-only NetherNet library for PHP",
+    "type": "library",
+    "license": "LGPL-3.0-only",
+    "require": {
+        "php": "^8.1"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.1.46",
+        "phpstan/phpstan-phpunit": "^2.0",
+        "phpunit/phpunit": "^10.5.24"
+    },
+    "suggest": {
+        "ext-webrtc": "candidate native webrtc backend for a future transport impl"
+    },
+    "autoload": {
+        "psr-4": {
+            "amber\\nethernet\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "amber\\nethernet\\tests\\": "tests/phpunit/"
+        }
+    },
+    "config": {
+        "allow-plugins": false,
+        "platform": {
+            "php": "8.1.0"
+        },
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "@php vendor/bin/phpunit --configuration phpunit.xml.dist",
+        "analyse": "@php vendor/bin/phpstan analyse --configuration phpstan.neon.dist --no-progress --memory-limit=1G",
+        "bench:check": "@php benchmarks/bootstrap.php",
+        "check": [
+            "@composer validate --strict",
+            "@composer check-platform-reqs",
+            "@test",
+            "@analyse",
+            "@bench:check"
+        ]
+    }
+}

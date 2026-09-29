@@ -1,0 +1,6 @@
+/vendor/
+/.cache/
+/.idea/
+/.vscode/
+/phpunit.xml
+/phpstan.neon
