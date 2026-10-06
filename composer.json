@@ -33,6 +33,7 @@
     },
     "scripts": {
         "test": "@php vendor/bin/phpunit --configuration phpunit.xml.dist",
+        "test:native": "@php vendor/bin/phpunit --configuration phpunit.native.xml.dist",
         "analyse": "@php vendor/bin/phpstan analyse --configuration phpstan.neon.dist --no-progress --memory-limit=1G",
         "bench:check": "@php benchmarks/bootstrap.php",
         "check": [

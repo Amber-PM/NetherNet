@@ -5,9 +5,13 @@ includes:
 parameters:
 	level: 9
 	phpVersion: 80100
+	scanFiles:
+		- stubs/webrtc.stub
 	tmpDir: .cache/phpstan
 	paths:
 		- src
 		- tests/phpunit
+		- tests/native
+		- scripts/reflect-webrtc.php
 		- benchmarks
 	reportUnmatchedIgnoredErrors: true

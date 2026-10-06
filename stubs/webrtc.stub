@@ -1,0 +1,160 @@
+<?php
+
+// Generated from ext-webrtc 0.3.0 linked to 0.24.5.
+// Static analysis only; never autoload or require this file.
+namespace pmmp\webrtc;
+
+class WebRtcException extends \RuntimeException{
+}
+
+enum GatheringState: int{
+	case NOT_STARTED = 0;
+	case IN_PROGRESS = 1;
+	case COMPLETE = 2;
+}
+
+enum ConnectionState: int{
+	case NOT_STARTED = 0;
+	case CONNECTING = 1;
+	case CONNECTED = 2;
+	case DISCONNECTED = 3;
+	case FAILED = 4;
+	case CLOSED = 5;
+}
+
+enum RelayType: int{
+	case UDP = 0;
+	case TCP = 1;
+	case TLS = 2;
+}
+
+enum SignalingState: int{
+	case STABLE = 0;
+	case HAVE_LOCAL_OFFER = 1;
+	case HAVE_REMOTE_OFFER = 2;
+	case HAVE_LOCAL_PRANSWER = 3;
+	case HAVE_REMOTE_PRANSWER = 4;
+}
+
+enum TransportPolicy: int{
+	case ALL = 0;
+	case RELAY = 1;
+}
+
+final class IceServer{
+	private function __construct(){ throw new \LogicException('Analysis only'); }
+	public static function stun(string $hostname, int $port = 3478) : \pmmp\webrtc\IceServer{ throw new \LogicException('Analysis only'); }
+	public static function turn(string $hostname, int $port, string $username, string $password, \pmmp\webrtc\RelayType $relayType = \pmmp\webrtc\RelayType::UDP) : \pmmp\webrtc\IceServer{ throw new \LogicException('Analysis only'); }
+	public function getHostname() : string{ throw new \LogicException('Analysis only'); }
+	public function getPort() : int{ throw new \LogicException('Analysis only'); }
+	public function getUsername() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getPassword() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getRelayType() : ?\pmmp\webrtc\RelayType{ throw new \LogicException('Analysis only'); }
+	public function isTurn() : bool{ throw new \LogicException('Analysis only'); }
+}
+
+final class IceCandidate{
+	private function __construct(){ throw new \LogicException('Analysis only'); }
+	public static function create(string $candidate, ?string $mid = NULL) : \pmmp\webrtc\IceCandidate{ throw new \LogicException('Analysis only'); }
+	public function getCandidate() : string{ throw new \LogicException('Analysis only'); }
+	public function getMid() : string{ throw new \LogicException('Analysis only'); }
+}
+
+final class DataChannelOptions{
+	private function __construct(){ throw new \LogicException('Analysis only'); }
+	public static function create() : \pmmp\webrtc\DataChannelOptions{ throw new \LogicException('Analysis only'); }
+	public function setUnordered(bool $unordered) : \pmmp\webrtc\DataChannelOptions{ throw new \LogicException('Analysis only'); }
+	public function setMaxRetransmits(?int $count) : \pmmp\webrtc\DataChannelOptions{ throw new \LogicException('Analysis only'); }
+	public function setMaxPacketLifeTime(?int $milliseconds) : \pmmp\webrtc\DataChannelOptions{ throw new \LogicException('Analysis only'); }
+	public function setProtocol(string $protocol) : \pmmp\webrtc\DataChannelOptions{ throw new \LogicException('Analysis only'); }
+	public function setNegotiated(bool $negotiated) : \pmmp\webrtc\DataChannelOptions{ throw new \LogicException('Analysis only'); }
+	public function setId(?int $id) : \pmmp\webrtc\DataChannelOptions{ throw new \LogicException('Analysis only'); }
+	public function isUnordered() : bool{ throw new \LogicException('Analysis only'); }
+	public function getMaxRetransmits() : ?int{ throw new \LogicException('Analysis only'); }
+	public function getMaxPacketLifeTime() : ?int{ throw new \LogicException('Analysis only'); }
+	public function getProtocol() : string{ throw new \LogicException('Analysis only'); }
+	public function isNegotiated() : bool{ throw new \LogicException('Analysis only'); }
+	public function getId() : ?int{ throw new \LogicException('Analysis only'); }
+}
+
+final class DataChannel{
+	private function __construct(){ throw new \LogicException('Analysis only'); }
+	public function getLabel() : string{ throw new \LogicException('Analysis only'); }
+	public function getProtocol() : string{ throw new \LogicException('Analysis only'); }
+	public function getId() : ?int{ throw new \LogicException('Analysis only'); }
+	public function isOpen() : bool{ throw new \LogicException('Analysis only'); }
+	public function isClosed() : bool{ throw new \LogicException('Analysis only'); }
+	public function isUnordered() : bool{ throw new \LogicException('Analysis only'); }
+	public function getMaxRetransmits() : ?int{ throw new \LogicException('Analysis only'); }
+	public function getMaxPacketLifeTime() : ?int{ throw new \LogicException('Analysis only'); }
+	public function getMaxMessageSize() : int{ throw new \LogicException('Analysis only'); }
+	public function getBufferedAmount() : int{ throw new \LogicException('Analysis only'); }
+	public function getAvailableAmount() : int{ throw new \LogicException('Analysis only'); }
+	public function getQueuedMessageCount() : int{ throw new \LogicException('Analysis only'); }
+	public function send(string $data) : bool{ throw new \LogicException('Analysis only'); }
+	public function receive() : ?string{ throw new \LogicException('Analysis only'); }
+	public function peek() : ?string{ throw new \LogicException('Analysis only'); }
+	public function close() : void{ throw new \LogicException('Analysis only'); }
+}
+
+final class PeerConnectionOptions{
+	private function __construct(){ throw new \LogicException('Analysis only'); }
+	public static function create() : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setMaxMessageSize(int $bytes) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setMaxReceiveQueueSize(int $bytes) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function getMaxReceiveQueueSize() : int{ throw new \LogicException('Analysis only'); }
+	public function setMaxReceiveQueueMessages(int $count) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function getMaxReceiveQueueMessages() : int{ throw new \LogicException('Analysis only'); }
+	public function setMaxSendQueueSize(int $bytes) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function getMaxSendQueueSize() : int{ throw new \LogicException('Analysis only'); }
+	public function setMaxRemoteDescriptionSize(int $bytes) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function getMaxRemoteDescriptionSize() : int{ throw new \LogicException('Analysis only'); }
+	public function setMaxPendingDataChannels(int $count) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function getMaxPendingDataChannels() : int{ throw new \LogicException('Analysis only'); }
+	public function setIceServers(\pmmp\webrtc\IceServer ...$servers) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setPortRange(int $begin, int $end) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setMtu(int $bytes) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setBindAddress(?string $address) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setCertificate(string $certPemFile, string $keyPemFile, ?string $keyPemPass = NULL) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setIceTcpEnabled(bool $enable) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setIceUdpMuxEnabled(bool $enable) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function setIceTransportPolicy(\pmmp\webrtc\TransportPolicy $policy) : \pmmp\webrtc\PeerConnectionOptions{ throw new \LogicException('Analysis only'); }
+	public function getIceTransportPolicy() : \pmmp\webrtc\TransportPolicy{ throw new \LogicException('Analysis only'); }
+	public function getMaxMessageSize() : int{ throw new \LogicException('Analysis only'); }
+	public function getIceServers() : array{ throw new \LogicException('Analysis only'); }
+	public function getPortRangeBegin() : int{ throw new \LogicException('Analysis only'); }
+	public function getPortRangeEnd() : int{ throw new \LogicException('Analysis only'); }
+	public function getMtu() : int{ throw new \LogicException('Analysis only'); }
+	public function getBindAddress() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getCertificatePemFile() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getKeyPemFile() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getKeyPemPass() : ?string{ throw new \LogicException('Analysis only'); }
+	public function isIceTcpEnabled() : bool{ throw new \LogicException('Analysis only'); }
+	public function isIceUdpMuxEnabled() : bool{ throw new \LogicException('Analysis only'); }
+}
+
+final class PeerConnection{
+	public function __construct(\pmmp\webrtc\PeerConnectionOptions $options){ throw new \LogicException('Analysis only'); }
+	public function setRemoteOffer(string $sdp) : void{ throw new \LogicException('Analysis only'); }
+	public function setRemoteAnswer(string $sdp) : void{ throw new \LogicException('Analysis only'); }
+	public function createDataChannel(string $label, ?\pmmp\webrtc\DataChannelOptions $options = NULL) : \pmmp\webrtc\DataChannel{ throw new \LogicException('Analysis only'); }
+	public function pollDataChannels() : array{ throw new \LogicException('Analysis only'); }
+	public function pollLocalCandidates() : array{ throw new \LogicException('Analysis only'); }
+	public function addRemoteCandidate(\pmmp\webrtc\IceCandidate $candidate) : void{ throw new \LogicException('Analysis only'); }
+	public function getGatheringState() : \pmmp\webrtc\GatheringState{ throw new \LogicException('Analysis only'); }
+	public function getState() : \pmmp\webrtc\ConnectionState{ throw new \LogicException('Analysis only'); }
+	public function getFailureState() : ?\pmmp\webrtc\ConnectionState{ throw new \LogicException('Analysis only'); }
+	public function getSignalingState() : \pmmp\webrtc\SignalingState{ throw new \LogicException('Analysis only'); }
+	public function isNegotiationNeeded() : bool{ throw new \LogicException('Analysis only'); }
+	public function getLocalDescription() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getLocalFingerprint() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getRemoteDescription() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getRemoteFingerprint() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getLocalAddress() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getRemoteAddress() : ?string{ throw new \LogicException('Analysis only'); }
+	public function getRoundTripTime() : ?int{ throw new \LogicException('Analysis only'); }
+	public function getBytesSent() : int{ throw new \LogicException('Analysis only'); }
+	public function getBytesReceived() : int{ throw new \LogicException('Analysis only'); }
+	public function clearStats() : void{ throw new \LogicException('Analysis only'); }
+	public function close() : void{ throw new \LogicException('Analysis only'); }
+}

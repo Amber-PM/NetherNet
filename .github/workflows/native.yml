@@ -1,0 +1,60 @@
+name: Native WebRTC
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Pinned native backend (PHP 8.5 NTS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer:v2
+          extensions: dom, mbstring, xml, xmlwriter
+          coverage: none
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake git pkg-config libssl-dev autoconf automake libtool
+          command -v phpize
+          command -v php-config
+
+      - name: Build and test pinned native dependencies
+        run: bash scripts/build-webrtc.sh "$RUNNER_TEMP/nethernet-native"
+
+      - name: Enable native extension for CLI subprocesses
+        run: echo "PHP_INI_SCAN_DIR=$PHP_INI_SCAN_DIR:$RUNNER_TEMP/nethernet-native/ini" >> "$GITHUB_ENV"
+
+      - name: Prove extension loads and inspect runtime API
+        run: |
+          php --ri webrtc
+          php --re webrtc
+          php scripts/reflect-webrtc.php > "$RUNNER_TEMP/webrtc.stub"
+          diff -u stubs/webrtc.stub "$RUNNER_TEMP/webrtc.stub"
+
+      - name: Install and validate library
+        run: |
+          composer install --prefer-dist --no-interaction --no-progress
+          composer check
+          composer dump-autoload --optimize --strict-psr --strict-ambiguous
+
+      - name: Run real peer integration tests
+        run: composer test:native
+
+      - name: Check whitespace and repository cleanliness
+        run: |
+          git diff --check
+          git diff --exit-code
