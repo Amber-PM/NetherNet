@@ -16,6 +16,33 @@ final class SdpIdentity{
 		public readonly ?string $providerDomain
 	){}
 
+	public static function fromAssertion(string $token, string $canonicalFingerprints, string $detachedJws, TransportConfig $config) : self{
+		if(strlen($token) > $config->maxIdentityBytes || strlen($detachedJws) > $config->maxIdentityBytes || strlen($canonicalFingerprints) > $config->maxSdpBytes || preg_match('//u', $token) !== 1 || preg_match('//u', $detachedJws) !== 1){
+			throw new TransportException('identity_invalid', 'Assertion exceeds configured limits');
+		}
+		$value = self::jsonObject($canonicalFingerprints);
+		if(array_keys(get_object_vars($value)) !== ['fingerprint'] || !is_array($value->fingerprint) || !array_is_list($value->fingerprint) || $value->fingerprint === []){
+			throw new TransportException('identity_invalid', 'Expected canonical fingerprints');
+		}
+		$sdp = "v=0\r\n";
+		foreach($value->fingerprint as $index => $fingerprint){
+			if(!$fingerprint instanceof \stdClass || array_keys(get_object_vars($fingerprint)) !== ['algorithm', 'digest'] || $fingerprint->algorithm !== 'sha-256' || !is_string($fingerprint->digest) || preg_match('/^[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){31}$/D', $fingerprint->digest) !== 1){
+				throw new TransportException('identity_invalid', 'Invalid canonical fingerprint');
+			}
+			if($index > 0){
+				$sdp .= "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+			}
+			$sdp .= 'a=fingerprint:sha-256 ' . $fingerprint->digest . "\r\n";
+		}
+		$assertion = json_encode(['token' => $token, 'fingerprints' => $detachedJws], JSON_THROW_ON_ERROR);
+		$envelope = json_encode(['idp' => ['domain' => 'local', 'protocol' => 'default'], 'assertion' => $assertion], JSON_THROW_ON_ERROR);
+		$identity = self::fromSdp("v=0\r\na=identity:" . base64_encode($envelope) . "\r\n" . substr($sdp, 5), $config);
+		if($identity->canonicalFingerprints !== $canonicalFingerprints){
+			throw new TransportException('identity_invalid', 'Fingerprint JSON is not canonical');
+		}
+		return $identity;
+	}
+
 	public static function fromSdp(string $sdp, TransportConfig $config) : self{
 		if(strlen($sdp) > $config->maxSdpBytes || preg_match('//u', $sdp) !== 1 ||
 			preg_match('/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\r(?!\n)/', $sdp) === 1){
