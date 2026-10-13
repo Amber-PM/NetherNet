@@ -10,7 +10,7 @@ use amber\nethernet\TransportException;
 
 final class FakePeer implements WebRtcPeer{
 	public const DIGEST = 'AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB';
-	public const SDP = "v=0\r\na=fingerprint:sha-256 " . self::DIGEST . "\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
+	public const SDP = "v=0\r\no=rtc 1 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=fingerprint:sha-256 " . self::DIGEST . "\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n";
 	public string $state = 'CONNECTED';
 	public bool $gathered = true;
 	public bool $open = true;

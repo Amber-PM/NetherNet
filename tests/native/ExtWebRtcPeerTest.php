@@ -8,6 +8,7 @@ use amber\nethernet\Channel;
 use amber\nethernet\TransportConfig;
 use amber\nethernet\TransportException;
 use amber\nethernet\backend\ExtWebRtcPeer;
+use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -22,12 +23,25 @@ final class ExtWebRtcPeerTest extends TestCase{
 		$this->peers = [];
 	}
 
-	/** @param \Closure(): bool $condition */
-	private static function waitFor(\Closure $condition) : void{
-		$deadline = hrtime(true) + 10_000_000_000;
+	/**
+	 * @param \Closure(): bool $condition
+	 * @param (\Closure(): string)|null $diagnostic
+	 */
+	private static function waitFor(\Closure $condition, ?\Closure $diagnostic = null) : void{
+		$started = hrtime(true);
+		$deadline = $started + 10_000_000_000;
 		while(!$condition()){
 			if(hrtime(true) >= $deadline){
-				self::fail('Native operation did not complete within ten seconds');
+				$message = 'Native operation did not complete within ten seconds';
+				if($diagnostic !== null){
+					$message .= '; elapsed_ms=' . (hrtime(true) - $started) / 1_000_000;
+					try{
+						$message .= '; ' . $diagnostic();
+					}catch(\Throwable $e){
+						throw new AssertionFailedError($message . '; diagnostic failed: ' . $e::class, 0, $e);
+					}
+				}
+				self::fail($message);
 			}
 			usleep(1000);
 		}
@@ -236,19 +250,46 @@ final class ExtWebRtcPeerTest extends TestCase{
 			if($duplicate){
 				$outgoing[] = $raw->createDataChannel($label, $options);
 			}
-			self::waitFor(fn() => $raw->getGatheringState() === \pmmp\webrtc\GatheringState::COMPLETE);
+			$phase = 'waiting for offer gathering';
+			$diagnostic = static function() use ($raw, $answer, $outgoing, &$phase) : string{
+				$offerState = $raw->getState()->name;
+				$answerState = $answer->getState();
+				return json_encode([
+					'phase' => $phase,
+					'monotonic_ns' => hrtime(true),
+					'offer_state' => $offerState,
+					'offer_failure' => $offerState === 'CLOSED' ? null : $raw->getFailureState()?->name,
+					'answer_state' => $answerState,
+					'answer_failure' => $answerState === 'CLOSED' ? null : $answer->getFailureState(),
+					'outgoing' => $offerState === 'CLOSED' ? [] : array_map(static function(\pmmp\webrtc\DataChannel $channel) : array{
+						if($channel->isClosed()){
+							return ['closed' => true];
+						}
+						return [
+							'closed' => false,
+							'open' => $channel->isOpen(),
+							'unordered' => $channel->isUnordered(),
+							'maxRetransmits' => $channel->getMaxRetransmits(),
+							'maxPacketLifeTime' => $channel->getMaxPacketLifeTime()
+						];
+					}, $outgoing)
+				], JSON_THROW_ON_ERROR);
+			};
+			self::waitFor(fn() => $raw->getGatheringState() === \pmmp\webrtc\GatheringState::COMPLETE, $diagnostic);
 			$sdp = $raw->getLocalDescription();
 			self::assertNotNull($sdp);
 			$answer->setRemoteOffer($sdp);
-			self::waitFor(fn() => $answer->isGatheringComplete());
+			$phase = 'waiting for answer gathering after remote offer';
+			self::waitFor(fn() => $answer->isGatheringComplete(), $diagnostic);
 			$sdp = $answer->getLocalDescription();
 			self::assertNotNull($sdp);
 			$raw->setRemoteAnswer($sdp);
+			$phase = 'waiting for channel_invalid after remote answer';
 			try{
 				self::waitFor(function() use ($answer) : bool{
 					$answer->pollChannels();
 					return false;
-				});
+				}, $diagnostic);
 			}catch(TransportException $e){
 				self::assertSame('channel_invalid', $e->errorCode);
 				self::assertSame('CLOSED', $answer->getState());

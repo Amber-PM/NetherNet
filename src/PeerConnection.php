@@ -176,10 +176,10 @@ final class PeerConnection implements Connection{
 			$sdp = $peer->getLocalDescription() ?? throw new TransportException('invalid_sdp', 'Missing gathered answer');
 			$parsed = SdpIdentity::fromSdp($sdp, $this->config);
 			if($parsed->token !== null){ throw new TransportException('identity_invalid', 'Native answer must not supply identity'); }
+			$offset = $this->answerIdentityOffset($sdp);
 			$assertion = $this->handler->signServer($parsed->canonicalFingerprints, ($this->wallClock)());
-			$end = strpos($sdp, "\n");
-			if($end === false){ throw new TransportException('invalid_sdp', 'Missing answer version line ending'); }
-			$answer = substr($sdp, 0, $end + 1) . 'a=identity:' . $assertion . "\r\n" . substr($sdp, $end + 1);
+			$ending = substr($sdp, $offset - 2, 2) === "\r\n" ? "\r\n" : "\n";
+			$answer = substr($sdp, 0, $offset) . 'a=identity:' . $assertion . $ending . substr($sdp, $offset);
 			$final = SdpIdentity::fromSdp($answer, $this->config);
 			if($final->token === null || $final->canonicalFingerprints !== $parsed->canonicalFingerprints || $final->sdpWithoutIdentity !== $sdp){
 				throw new TransportException('identity_signing_failed', 'Signer returned an invalid identity envelope');
@@ -204,6 +204,53 @@ final class PeerConnection implements Connection{
 		}
 		$this->codec->expire($now);
 		return null;
+	}
+
+	private function answerIdentityOffset(string $sdp) : int{
+		$lines = preg_split('/(?<=\n)/', $sdp);
+		if($lines === false){ throw new TransportException('invalid_sdp', 'Cannot split answer lines'); }
+		$offset = 0;
+		$mediaOffset = null;
+		$last = -1;
+		$seen = [];
+		$fingerprint = null;
+		foreach($lines as $original){
+			if($original === ''){ continue; }
+			$line = rtrim($original, "\r\n");
+			if(strlen($line) < 3 || $line[1] !== '='){ throw new TransportException('invalid_sdp', 'Malformed answer field'); }
+			$type = $line[0];
+			if($type === 'm'){
+				if(preg_match('/^m=application [0-9]+ UDP\/DTLS\/SCTP webrtc-datachannel$/D', $line) !== 1){
+					throw new TransportException('invalid_sdp', 'Answer requires a data-channel media section');
+				}
+				if(!isset($seen['v'], $seen['o'], $seen['s'], $seen['t']) || $fingerprint === null){
+					throw new TransportException('invalid_sdp', 'Answer requires session fields and a session fingerprint');
+				}
+				$mediaOffset ??= $offset;
+			}elseif($mediaOffset === null){
+				$rank = strpos('vosiuepcbtrzka', $type);
+				if($rank === false || ($rank < $last && !($type === 't' && $last === 10)) ||
+					(isset($seen[$type]) && str_contains('vosiuczk', $type)) || ($type === 'r' && !isset($seen['t']))){
+					throw new TransportException('invalid_sdp', 'Invalid answer session field order');
+				}
+				if(($type === 'v' && $line !== 'v=0') ||
+					($type === 'o' && preg_match('/^o=\S+ [0-9]+ [0-9]+ IN IP[46] \S+$/D', $line) !== 1) ||
+					($type === 't' && preg_match('/^t=[0-9]+ [0-9]+$/D', $line) !== 1)){
+					throw new TransportException('invalid_sdp', 'Invalid answer session field');
+				}
+				$last = $rank;
+				$seen[$type] = true;
+			}elseif(!str_contains('icbka', $type)){
+				throw new TransportException('invalid_sdp', 'Unexpected answer media field');
+			}
+			if(str_starts_with($line, 'a=fingerprint:')){
+				$digest = strtoupper(substr($line, strlen('a=fingerprint:sha-256 ')));
+				if($fingerprint !== null && $fingerprint !== $digest){ throw new TransportException('invalid_sdp', 'Answer fingerprints name different DTLS certificates'); }
+				$fingerprint = $digest;
+			}
+			$offset += strlen($original);
+		}
+		return $mediaOffset ?? throw new TransportException('invalid_sdp', 'Answer has no media section');
 	}
 
 	private function canWork(int $bytes) : bool{
