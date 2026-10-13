@@ -1,0 +1,27 @@
+{
+    "generatedWith": "Node v24.18.0, OpenSSL 3.5.7, crypto.sign ieee-p1363",
+    "vectors": {
+        "highBit": {
+            "cpk": {
+                "kty": "EC",
+                "x": "Dy5RshIWfDE2gFtEVpU90DH7t0-LlyySebbjR3CZ7ZpIg9FGC4w-sNDteMDoN--j",
+                "y": "LMv0pBI7Ha9Ia1ZPvXUMMW1LzodqS2B6Pw3OEorbj-_GO5jXyK4j1ig_uq7F_ATd",
+                "crv": "P-384"
+            },
+            "publicKeyDer": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEDy5RshIWfDE2gFtEVpU90DH7t0+LlyySebbjR3CZ7ZpIg9FGC4w+sNDteMDoN++jLMv0pBI7Ha9Ia1ZPvXUMMW1LzodqS2B6Pw3OEorbj+/GO5jXyK4j1ig/uq7F/ATd",
+            "payload": "{\"fingerprint\":[{\"algorithm\":\"sha-256\",\"digest\":\"AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99\"}]}",
+            "jws": "eyAidHlwIjogIkpXVCIsICJhbGciOiAiRVMzODQiIH0..vVadXBO-tVB0nv8rSfhIEwz0zezX82lBda12ABaRlP0MMKl9_HXwo3TqR0kkBmZ48lDrgjinNwPJo7DMkto-tPFbC3pTN9H3yK4Re2EeBZQQAk5fWqxDY3C8WrZfgF1n"
+        },
+        "leadingZero": {
+            "cpk": {
+                "kty": "EC",
+                "x": "qSz0Od35L7rocH4_zRwcT9ocT99ByOscSw0m_7RyG4V2DCkM0rjxUE6OFG90yAl0",
+                "y": "zDixDLajvZ5V67o3mewaw9XSiq7lGyZoMWbLH5Omh3iyi6NJ2TfAts4ysDjslyX_",
+                "crv": "P-384"
+            },
+            "publicKeyDer": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqSz0Od35L7rocH4/zRwcT9ocT99ByOscSw0m/7RyG4V2DCkM0rjxUE6OFG90yAl0zDixDLajvZ5V67o3mewaw9XSiq7lGyZoMWbLH5Omh3iyi6NJ2TfAts4ysDjslyX/",
+            "payload": "{\"fingerprint\":[{\"algorithm\":\"sha-256\",\"digest\":\"AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99\"}]}",
+            "jws": "eyAidHlwIjogIkpXVCIsICJhbGciOiAiRVMzODQiIH0..Jv2AFHojJGLihBTou8WxVB3ud0qzkbxBktLc3zC_4POO64CL9yxEywtbk7IXIpbfAOVikt2oUVq1-eFs6HVJJEICtR47bqRZaZG0TQlhhVlK0HiVsJ9f71dofOeJeGm2"
+        }
+    }
+}
