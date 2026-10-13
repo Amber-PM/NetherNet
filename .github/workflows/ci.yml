@@ -5,92 +5,70 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
-  validation:
-    name: Validation
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  git-integrity:
+    name: Event Diff and Working Tree
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.1'
-          tools: composer:v2
-          extensions: dom, mbstring, xml, xmlwriter
-          coverage: none
+      - name: Check event diff and working tree
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
 
-      - name: Cache Composer dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/composer/files
-          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-composer-
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            head_sha="$PR_HEAD_SHA"
+            base_sha="$(git merge-base "$PR_BASE_SHA" "$head_sha")"
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            head_sha="$PUSH_AFTER_SHA"
+            if [[ "$PUSH_BEFORE_SHA" =~ ^0+$ ]]; then
+              base_sha="$(git hash-object -t tree --stdin </dev/null)"
+            else
+              base_sha="$PUSH_BEFORE_SHA"
+            fi
+          else
+            head_sha="$WORKFLOW_SHA"
+            if git rev-parse --verify "${head_sha}^1" >/dev/null 2>&1; then
+              base_sha="$(git rev-parse --verify "${head_sha}^1")"
+            else
+              base_sha="$(git hash-object -t tree --stdin </dev/null)"
+            fi
+          fi
 
-      - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+          git diff --check "$base_sha" "$head_sha"
+          git diff --exit-code
+          git diff --cached --exit-code
 
-      - name: Validate Composer configuration
-        run: composer validate --strict
-
-      - name: Check platform requirements
-        run: composer check-platform-reqs
-
-      - name: Check benchmark bootstrap
-        run: composer bench:check
-
-      - name: Check whitespace
-        run: git diff --check
-
-      - name: Verify clean working tree
-        run: git diff --exit-code
-
-  phpstan:
-    name: PHPStan
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.1'
-          tools: composer:v2
-          extensions: dom, mbstring, xml, xmlwriter
-          coverage: none
-
-      - name: Cache Composer dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/composer/files
-          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-composer-
-
-      - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
-
-      - name: Run PHPStan
-        run: composer analyse
-
-  phpunit:
-    name: PHPUnit (PHP ${{ matrix.php }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  composer-check:
+    name: Composer Check (PHP ${{ matrix.php }})
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         php: ['8.1', '8.2', '8.3', '8.4', '8.5']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -102,7 +80,7 @@ jobs:
           coverage: none
 
       - name: Cache Composer dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/composer/files
           key: ${{ runner.os }}-php-${{ matrix.php }}-composer-${{ hashFiles('composer.lock') }}
@@ -112,15 +90,19 @@ jobs:
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
 
-      - name: Run PHPUnit
-        run: composer test
+      - name: Run Composer check suite
+        run: composer check
+
+      - name: Verify clean working tree
+        run: git diff --exit-code
 
   autoload:
-    name: Autoload Check
-    runs-on: ubuntu-latest
+    name: Strict Composer Autoload
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -132,12 +114,12 @@ jobs:
           coverage: none
 
       - name: Cache Composer dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/composer/files
-          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          key: ${{ runner.os }}-php-8.1-composer-${{ hashFiles('composer.lock') }}
           restore-keys: |
-            ${{ runner.os }}-composer-
+            ${{ runner.os }}-php-8.1-composer-
 
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
@@ -150,10 +132,11 @@ jobs:
 
   prefer-lowest:
     name: Prefer Lowest (PHP 8.1)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -164,32 +147,27 @@ jobs:
           extensions: dom, mbstring, xml, xmlwriter
           coverage: none
 
-      - name: Cache Composer dependencies
-        uses: actions/cache@v4
+      - name: Cache lowest Composer dependencies
+        uses: actions/cache@v6
         with:
           path: ~/.cache/composer/files
-          key: ${{ runner.os }}-composer-lowest-${{ hashFiles('composer.json') }}
+          key: ${{ runner.os }}-php-8.1-composer-lowest-${{ hashFiles('composer.json') }}
           restore-keys: |
-            ${{ runner.os }}-composer-lowest-
+            ${{ runner.os }}-php-8.1-composer-lowest-
 
       - name: Install lowest dependencies
         run: composer update --prefer-lowest --prefer-dist --no-interaction --no-progress
 
-      - name: Run PHPUnit
-        run: composer test
-
-      - name: Run PHPStan
-        run: composer analyse
-
-      - name: Check benchmark bootstrap
-        run: composer bench:check
+      - name: Run Composer check suite
+        run: composer check
 
   windows-smoke:
     name: Windows Smoke (PHP 8.1)
-    runs-on: windows-latest
-    timeout-minutes: 10
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: windows-2025
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -206,12 +184,12 @@ jobs:
         run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
 
       - name: Cache Composer dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          key: ${{ runner.os }}-php-8.1-composer-${{ hashFiles('composer.lock') }}
           restore-keys: |
-            ${{ runner.os }}-composer-
+            ${{ runner.os }}-php-8.1-composer-
 
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress

@@ -5,16 +5,21 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   native:
     name: Pinned native backend (PHP 8.5 NTS)
+    if: github.event_name != 'push' || github.event.deleted == false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -45,6 +50,14 @@ jobs:
           php scripts/reflect-webrtc.php > "$RUNNER_TEMP/webrtc.stub"
           diff -u stubs/webrtc.stub "$RUNNER_TEMP/webrtc.stub"
 
+      - name: Cache Composer dependencies
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/composer/files
+          key: ${{ runner.os }}-php-8.5-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-8.5-composer-
+
       - name: Install and validate library
         run: |
           composer install --prefer-dist --no-interaction --no-progress
@@ -54,7 +67,5 @@ jobs:
       - name: Run real peer integration tests
         run: composer test:native
 
-      - name: Check whitespace and repository cleanliness
-        run: |
-          git diff --check
-          git diff --exit-code
+      - name: Verify clean working tree
+        run: git diff --exit-code
