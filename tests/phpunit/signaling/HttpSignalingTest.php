@@ -7,6 +7,8 @@ namespace amber\nethernet\tests\signaling;
 use amber\nethernet\backend\WebRtcPeer;
 use amber\nethernet\Channel;
 use amber\nethernet\ConnectionState;
+use amber\nethernet\SignalingPeerAddress;
+use amber\nethernet\SignalingPeerConnection;
 use amber\nethernet\identity\ClientServerIdentityHandler;
 use amber\nethernet\identity\IdentityHandler;
 use amber\nethernet\identity\SdpIdentity;
@@ -89,6 +91,34 @@ final class HttpSignalingTest extends TestCase{
 	private function assertPending(int $id) : void{
 		self::assertSame(HttpState::PENDING, $this->http->getState($id));
 		self::assertNull($this->http->takeResponse($id));
+	}
+
+	public function testDirectAdmissionKeepsAddressOptional() : void{
+		$id = $this->transport->accept('192.0.2.1', $this->fixture->offer(FakePeer::SDP));
+		for($i = 0; $i < 3; ++$i){ $this->transport->poll(); }
+		$connection = $this->listener->connections[$id];
+		self::assertInstanceOf(SignalingPeerConnection::class, $connection);
+		self::assertNull($connection->getSignalingPeerAddress());
+	}
+
+	public function testCancelledExchangeReleasesAddressBeforeAndAfterAdmission() : void{
+		foreach([false, true] as $admit){
+			$address = new SignalingPeerAddress('192.0.2.123', 54321);
+			$reference = \WeakReference::create($address);
+			$id = $this->http->open($address);
+			unset($address);
+			if($admit){
+				$body = $this->fixture->offer(FakePeer::SDP);
+				$this->http->receive($id, "POST /v1/join/id HTTP/1.1\r\nHost: test\r\nContent-Type: application/sdp\r\nContent-Length: " . strlen($body) . "\r\n\r\n" . $body);
+				self::assertNotNull($this->http->getTransportId($id));
+			}
+			self::assertNotNull($reference->get());
+			$this->http->cancel($id);
+			self::assertSame(HttpState::CLOSED, $this->http->getState($id));
+			self::assertNull($reference->get());
+		}
+		$this->transport->poll();
+		self::assertSame([], $this->listener->connections);
 	}
 
 	public function testCancelPendingAndIgnoreLateAnswers() : void{

@@ -72,7 +72,11 @@ final class HttpSignalingNativeTest extends TestCase{
 			$client->setRemoteAnswer($parsed->sdpWithoutIdentity);
 			$http->finish($exchange);
 			$http->stop();
-			self::waitFor(function() use ($transport, $listener, $id) : bool{ $transport->poll(); return isset($listener->connections[$id]); });
+			// The server's onOpen can precede the client's DCEP acknowledgement.
+			self::waitFor(function() use ($transport, $listener, $id, $client) : bool{
+				$transport->poll();
+				return isset($listener->connections[$id]) && $client->isChannelOpen(Channel::RELIABLE) && $client->isChannelOpen(Channel::UNRELIABLE);
+			});
 			self::assertSame(ConnectionState::OPEN, $listener->connections[$id]->getState());
 			self::assertSame('native-opaque', $listener->connections[$id]->getNetworkId());
 			self::assertTrue($client->sendFrame(Channel::UNRELIABLE, "\0payload"));

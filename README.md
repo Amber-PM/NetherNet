@@ -15,11 +15,19 @@ This library focuses strictly on the transport connection itself. Packet decodin
 
 ## Requirements
 
-- PHP 8.1 or higher
+- PHP 8.1 or higher, with OpenSSL
+- ext-webrtc 0.3.0 and libdatachannel 0.24.5 for the native backend
+- A native extension built for the running PHP ABI; ZTS builds are required when
+  embedding the library in Amber/PocketMine
+
+Composer enforces the extension requirement. `ExtWebRtcPeer::assertAvailable()`
+also verifies the libdatachannel version and native API before listening.
+NetherNet stays transport-only; server packaging and operator trust provisioning
+belong to the embedding application.
 
 ## Development
 
-Run tests and analysis locally with Composer:
+With the native backend installed, run tests and analysis with Composer:
 
 ```bash
 composer check
@@ -32,6 +40,14 @@ composer test
 composer analyse
 composer bench:check
 ```
+
+Backend-independent development can install with
+`composer install --ignore-platform-req=ext-webrtc` and run `composer test` and
+`composer analyse`. This exemption only supports fake-backend unit tests; it does
+not provide a working native transport. The library CI uses that explicit exemption
+for its PHP/Windows unit matrix; Amber release CI builds and validates the pinned
+native backend against PocketMine ZTS PHP. Run `composer test:native` with the real
+extension to validate transport interoperability.
 
 ## License
 

@@ -56,7 +56,8 @@ final class Transport{
 		return $this->lastNow = $now;
 	}
 
-	public function accept(string $networkId, string $offerSdp) : int{
+	// caller must supply a trusted socket endpoint
+	public function accept(string $networkId, string $offerSdp, ?SignalingPeerAddress $signalingPeerAddress = null) : int{
 		if($this->stopped){ throw new TransportException('closed', 'Transport is stopped'); }
 		if($networkId === '' || strlen($networkId) > $this->config->maxNetworkIdBytes){
 			throw new TransportException('network_id_invalid', 'Network ID is empty or exceeds limit');
@@ -78,7 +79,7 @@ final class Transport{
 		$connection = new PeerConnection($id, $networkId, $identity, $this->config, $this->identityHandler, $this->listener, $this->factory, $this->wallClock, $this->budget, $this->now(), static function(int $closedId) use ($owner) : void{
 			$transport = $owner->get();
 			if($transport !== null){ unset($transport->connections[$closedId]); }
-		});
+		}, $signalingPeerAddress);
 		$this->connections[$id] = $connection;
 		$connection->startVerification();
 		return $id;

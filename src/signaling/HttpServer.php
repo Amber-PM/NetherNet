@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace amber\nethernet\signaling;
 
 use amber\nethernet\TransportConfig;
+use amber\nethernet\SignalingPeerAddress;
 
 final class HttpServer{
 	/** @var resource|null */
@@ -122,7 +123,11 @@ final class HttpServer{
 				if(!stream_set_blocking($stream, false)){
 					throw new \RuntimeException('HTTP client could not become nonblocking');
 				}
-				$id = $this->signaling->open();
+				$peerName = stream_socket_get_name($stream, true);
+				if($peerName === false){ fclose($stream); continue; }
+				try{ $peerAddress = SignalingPeerAddress::fromSocketName($peerName); }
+				catch(\InvalidArgumentException){ fclose($stream); continue; }
+				$id = $this->signaling->open($peerAddress);
 			}catch(HttpException){
 				fclose($stream);
 				continue;

@@ -11,7 +11,7 @@ use amber\nethernet\identity\PeerIdentity;
 use amber\nethernet\identity\SdpIdentity;
 use amber\nethernet\internal\TransportBudget;
 
-final class PeerConnection implements Connection{
+final class PeerConnection implements SignalingPeerConnection{
 	private ConnectionState $state = ConnectionState::VERIFYING;
 	private ?PeerIdentity $identity = null;
 	private ?TransportException $verificationError = null;
@@ -49,7 +49,8 @@ final class PeerConnection implements Connection{
 		private readonly \Closure $wallClock,
 		private readonly TransportBudget $budget,
 		private float $startedAt,
-		private readonly \Closure $closed
+		private readonly \Closure $closed,
+		private readonly ?SignalingPeerAddress $signalingPeerAddress = null
 	){
 		$this->offer = $offer;
 		$this->codec = new FrameCodec($config);
@@ -74,6 +75,7 @@ final class PeerConnection implements Connection{
 
 	public function getId() : int{ return $this->id; }
 	public function getNetworkId() : string{ return $this->networkId; }
+	public function getSignalingPeerAddress() : ?SignalingPeerAddress{ return $this->signalingPeerAddress; }
 	public function getIdentity() : PeerIdentity{ return $this->identity ?? throw new TransportException('identity_missing', 'Peer is not authenticated'); }
 	public function getState() : ConnectionState{ return $this->state; }
 

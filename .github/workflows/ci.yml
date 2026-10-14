@@ -88,10 +88,16 @@ jobs:
             ${{ runner.os }}-php-${{ matrix.php }}-composer-
 
       - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: composer install --ignore-platform-req=ext-webrtc --prefer-dist --no-interaction --no-progress
 
       - name: Run Composer check suite
-        run: composer check
+        # Backend-independent matrix; the Amber release CI builds and validates the native ZTS backend.
+        run: |
+          composer validate --strict
+          composer check-platform-reqs --ignore-platform-req=ext-webrtc
+          composer test
+          composer analyse
+          composer bench:check
 
       - name: Verify clean working tree
         run: git diff --exit-code
@@ -122,7 +128,7 @@ jobs:
             ${{ runner.os }}-php-8.1-composer-
 
       - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: composer install --ignore-platform-req=ext-webrtc --prefer-dist --no-interaction --no-progress
 
       - name: Verify Composer autoloading
         run: composer dump-autoload --optimize --strict-psr --strict-ambiguous
@@ -156,10 +162,16 @@ jobs:
             ${{ runner.os }}-php-8.1-composer-lowest-
 
       - name: Install lowest dependencies
-        run: composer update --prefer-lowest --prefer-dist --no-interaction --no-progress
+        run: composer update --ignore-platform-req=ext-webrtc --prefer-lowest --prefer-dist --no-interaction --no-progress
 
       - name: Run Composer check suite
-        run: composer check
+        # Backend-independent matrix; the Amber release CI builds and validates the native ZTS backend.
+        run: |
+          composer validate --strict
+          composer check-platform-reqs --ignore-platform-req=ext-webrtc
+          composer test
+          composer analyse
+          composer bench:check
 
   windows-smoke:
     name: Windows Smoke (PHP 8.1)
@@ -192,7 +204,7 @@ jobs:
             ${{ runner.os }}-php-8.1-composer-
 
       - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: composer install --ignore-platform-req=ext-webrtc --prefer-dist --no-interaction --no-progress
 
       - name: Run PHPUnit
         run: composer test

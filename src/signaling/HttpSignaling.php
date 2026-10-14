@@ -6,6 +6,7 @@ namespace amber\nethernet\signaling;
 
 use amber\nethernet\Channel;
 use amber\nethernet\Connection;
+use amber\nethernet\SignalingPeerAddress;
 use amber\nethernet\Transport;
 use amber\nethernet\TransportConfig;
 use amber\nethernet\TransportException;
@@ -38,11 +39,12 @@ final class HttpSignaling implements TransportListener{
 		return $this->transport?->get() ?? throw new \LogicException('HTTP signaling requires a live bound transport');
 	}
 
-	public function open() : int{
+	// caller must supply a trusted socket endpoint
+	public function open(?SignalingPeerAddress $peerAddress = null) : int{
 		$this->transport();
 		if($this->stopped || count($this->exchanges) >= $this->config->maxHttpConnections || $this->nextId === PHP_INT_MAX){ throw new HttpException(503); }
 		$id = $this->nextId++;
-		$this->exchanges[$id] = new HttpExchange(new HttpRequestParser($this->config));
+		$this->exchanges[$id] = new HttpExchange(new HttpRequestParser($this->config), $peerAddress);
 		return $id;
 	}
 
@@ -90,7 +92,7 @@ final class HttpSignaling implements TransportListener{
 			if($this->admitting){ throw new \LogicException('HTTP transport admission cannot be reentered'); }
 			$this->admitting = true;
 			try{
-				$transportId = $this->transport()->accept($request['networkId'], $request['body']);
+				$transportId = $this->transport()->accept($request['networkId'], $request['body'], $exchange->peerAddress);
 			}catch(TransportException $e){
 				$this->reject($id, new HttpException(self::failureStatus($e->errorCode, true)));
 				return;

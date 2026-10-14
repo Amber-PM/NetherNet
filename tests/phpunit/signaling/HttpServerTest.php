@@ -8,6 +8,7 @@ use amber\nethernet\backend\WebRtcPeer;
 use amber\nethernet\identity\ClientServerIdentityHandler;
 use amber\nethernet\identity\SdpIdentity;
 use amber\nethernet\ConnectionState;
+use amber\nethernet\SignalingPeerConnection;
 use amber\nethernet\signaling\HttpState;
 use amber\nethernet\signaling\HttpServer;
 use amber\nethernet\signaling\HttpSignaling;
@@ -42,12 +43,12 @@ final class HttpServerTest extends TestCase{
 	 * @param \Closure(): float|null $clock
 	 * @param \Closure(): ServerMetadata|null $metadata
 	 */
-	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null) : void{
+	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null, string $bind = 'tcp://127.0.0.1:0') : void{
 		$config ??= new TransportConfig();
 		$this->http = new HttpSignaling($config, $metadata ?? static fn() => new ServerMetadata('Server', 12, 'custom', 'World', 0, 20, 0), $this->listener);
 		$this->transport = new Transport($config, new ClientServerIdentityHandler($this->fixture->verifier(), $this->fixture->server, $config, static fn() => 1000), $this->http, fn() : WebRtcPeer => $this->peer, $clock, static fn() => 1000);
 		$this->http->bind($this->transport);
-		$this->server = new HttpServer($config, $this->http, ioBytes: $ioBytes, clock: $clock);
+		$this->server = new HttpServer($config, $this->http, $bind, ioBytes: $ioBytes, clock: $clock);
 	}
 
 	protected function tearDown() : void{
@@ -115,6 +116,30 @@ final class HttpServerTest extends TestCase{
 
 	private function post(string $body, string $id = 'opaque%3Aid') : string{
 		return "POST /v1/join/$id HTTP/1.1\r\nHost: test\r\nContent-Type: application/sdp\r\nContent-Length: " . strlen($body) . "\r\n\r\n" . $body;
+	}
+
+	public function testSocketAddressSurvivesHttpCleanupAndIgnoresClientClaims() : void{
+		$offer = $this->fixture->offer(FakePeer::SDP);
+		$ports = [];
+		foreach(['203.0.113.10', '203.0.113.11'] as $claim){
+			$socket = $this->client();
+			$local = stream_socket_get_name($socket, false);
+			self::assertNotFalse($local);
+			$request = str_replace("Host: test\r\n", "Host: test\r\nX-Forwarded-For: $claim\r\nForwarded: for=$claim\r\n", $this->post($offer, $claim));
+			$this->send($socket, $request);
+			self::assertStringStartsWith('HTTP/1.1 200 OK', $this->response($socket));
+			$this->transport->poll();
+			$connection = $this->listener->connections[count($this->listener->connections)];
+			self::assertInstanceOf(SignalingPeerConnection::class, $connection);
+			$address = $connection->getSignalingPeerAddress();
+			self::assertNotNull($address);
+			self::assertSame('127.0.0.1', $address->ip);
+			self::assertSame((int) substr($local, strrpos($local, ':') + 1), $address->port);
+			self::assertSame($claim, $connection->getNetworkId());
+			$ports[] = $address->port;
+			self::assertSame(0, $this->server->getConnectionCount());
+		}
+		self::assertNotSame($ports[0], $ports[1]);
 	}
 
 	public function testOneByteHeadersAndBoundedPartialWrites() : void{
@@ -364,6 +389,28 @@ final class HttpServerTest extends TestCase{
 	public static function ipv6Loopbacks() : iterable{
 		yield 'IPv6' => ['tcp://[::1]:0'];
 		yield 'mapped IPv6' => ['tcp://[::ffff:127.0.0.1]:0'];
+	}
+
+	#[DataProvider('ipv6Loopbacks')]
+	public function testRealIpv6PostRetainsSocketEndpoint(string $bind) : void{
+		$probe = @stream_socket_server($bind, $code, $error);
+		if($probe === false){ self::markTestSkipped('OS does not permit this IPv6 loopback bind'); }
+		fclose($probe);
+		$this->server->stop();
+		$this->transport->stop();
+		$this->make(bind: $bind);
+		$socket = $this->client();
+		$local = stream_socket_get_name($socket, false);
+		self::assertNotFalse($local);
+		$this->send($socket, $this->post($this->fixture->offer(FakePeer::SDP)));
+		self::assertStringStartsWith('HTTP/1.1 200 OK', $this->response($socket));
+		$this->transport->poll();
+		$connection = $this->listener->connections[1];
+		self::assertInstanceOf(SignalingPeerConnection::class, $connection);
+		$address = $connection->getSignalingPeerAddress();
+		self::assertNotNull($address);
+		self::assertSame($bind === 'tcp://[::1]:0' ? '::1' : '::ffff:127.0.0.1', $address->ip);
+		self::assertSame((int) substr($local, strrpos($local, ':') + 1), $address->port);
 	}
 
 	#[DataProvider('ipv6Loopbacks')]

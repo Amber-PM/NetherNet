@@ -11,6 +11,7 @@ use amber\nethernet\framing\FrameCodec;
 use amber\nethernet\identity\ClientServerIdentityHandler;
 use amber\nethernet\identity\SdpIdentity;
 use amber\nethernet\SendResult;
+use amber\nethernet\SignalingPeerConnection;
 use amber\nethernet\signaling\HttpServer;
 use amber\nethernet\signaling\HttpSignaling;
 use amber\nethernet\signaling\HttpState;
@@ -192,6 +193,9 @@ final class HttpServerNativeTest extends TestCase{
 
 	private function answer(string $offer) : SdpIdentity{
 		$socket = $this->socket();
+		$local = stream_socket_get_name($socket, false);
+		self::assertNotFalse($local);
+		$this->evidence['signaling_peer_port'] = (int) substr($local, strrpos($local, ':') + 1);
 		$started = hrtime(true);
 		$this->write($socket, self::post($offer));
 		$wire = $this->response($socket);
@@ -275,6 +279,12 @@ final class HttpServerNativeTest extends TestCase{
 		$this->connect($answer);
 		$this->host->stop();
 		self::assertSame(ConnectionState::OPEN, $this->listener->connections[1]->getState());
+		$connection = $this->listener->connections[1];
+		self::assertInstanceOf(SignalingPeerConnection::class, $connection);
+		$address = $connection->getSignalingPeerAddress();
+		self::assertNotNull($address);
+		self::assertSame('127.0.0.1', $address->ip);
+		self::assertSame($this->evidence['signaling_peer_port'], $address->port);
 		$codec = new FrameCodec($this->config);
 		$bytes = 0;
 		foreach(Channel::cases() as $channel){
