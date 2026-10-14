@@ -91,10 +91,9 @@ jobs:
         run: composer install --ignore-platform-req=ext-webrtc --prefer-dist --no-interaction --no-progress
 
       - name: Run Composer check suite
-        # Backend-independent matrix; the Amber release CI builds and validates the native ZTS backend.
+        # Backend-independent matrix; Native WebRTC CI checks platform requirements with ext-webrtc loaded.
         run: |
           composer validate --strict
-          composer check-platform-reqs --ignore-platform-req=ext-webrtc
           composer test
           composer analyse
           composer bench:check
@@ -165,10 +164,9 @@ jobs:
         run: composer update --ignore-platform-req=ext-webrtc --prefer-lowest --prefer-dist --no-interaction --no-progress
 
       - name: Run Composer check suite
-        # Backend-independent matrix; the Amber release CI builds and validates the native ZTS backend.
+        # Backend-independent matrix; Native WebRTC CI checks platform requirements with ext-webrtc loaded.
         run: |
           composer validate --strict
-          composer check-platform-reqs --ignore-platform-req=ext-webrtc
           composer test
           composer analyse
           composer bench:check
