@@ -478,16 +478,14 @@ final class HttpServerNativeTest extends TestCase{
 		self::assertCount(1, $this->listener->closed);
 	}
 
-	public function testListenerExceptionPropagatesAndExplicitShutdownReleasesPeer() : void{
+	public function testListenerExceptionClosesOnlyItsPeerAndReleasesNativeResources() : void{
 		$this->listener->opened = static function() : void{ throw new \RuntimeException('listener failure'); };
 		$answer = $this->answer($this->offer());
 		$this->client->setRemoteAnswer($answer->sdpWithoutIdentity);
-		try{
-			$this->waitFor(fn() => false);
-			self::fail('Listener exception swallowed');
-		}catch(\RuntimeException $e){
-			self::assertSame('listener failure', $e->getMessage());
-		}
+		$this->waitFor(fn() => $this->listener->closed !== []);
+		self::assertSame('callback_error', $this->listener->closed[0][1]);
+		self::assertSame(ConnectionState::CLOSED, $this->listener->connections[1]->getState());
+		self::assertCount(1, $this->listener->closed);
 		$this->transport->stop();
 		self::assertSame(['answer', 'open', 'close'], $this->listener->events);
 		self::assertSame('CLOSED', $this->peers[0]->getState());

@@ -10,6 +10,7 @@ use amber\nethernet\identity\IdentityHandler;
 use amber\nethernet\identity\PeerIdentity;
 use amber\nethernet\identity\SdpIdentity;
 use amber\nethernet\internal\TransportBudget;
+use amber\nethernet\internal\TransportCleanupException;
 
 final class PeerConnection implements SignalingPeerConnection{
 	private ConnectionState $state = ConnectionState::VERIFYING;
@@ -96,7 +97,7 @@ final class PeerConnection implements SignalingPeerConnection{
 			$this->verificationError = $e instanceof TransportException ? $e : new TransportException('identity_verification_failed', 'Verifier failed', $e);
 			return;
 		}
-		if($this->state === ConnectionState::CLOSED){ $cancel(); }
+		if($this->state === ConnectionState::CLOSED){ $this->notify($cancel); }
 		elseif(!$this->verified){ $this->cancel = $cancel; }
 	}
 
@@ -110,8 +111,10 @@ final class PeerConnection implements SignalingPeerConnection{
 			return;
 		}
 		if($event !== null){
-			if(is_string($event)){ $this->listener->onAnswer($this->id, $event); }
-			else{ $this->listener->onOpen($this); }
+			$this->notify(function() use ($event) : void{
+				if(is_string($event)){ $this->listener->onAnswer($this->id, $event); }
+				else{ $this->listener->onOpen($this); }
+			});
 		}
 		if($this->state !== ConnectionState::OPEN){ return; }
 		$sendFirst = $this->sendFirst;
@@ -146,7 +149,7 @@ final class PeerConnection implements SignalingPeerConnection{
 					return;
 				}
 				$progress = true;
-				if($payload !== null){ $this->listener->onPayload($this, $payload, $channel); }
+				if($payload !== null){ $this->notify(fn() => $this->listener->onPayload($this, $payload, $channel)); }
 			}
 			if(!$progress){ break; }
 		}
@@ -286,7 +289,7 @@ final class PeerConnection implements SignalingPeerConnection{
 	/** @param \Closure(bool): void|null $accepted */
 	public function send(string $payload, Channel $channel = Channel::RELIABLE, bool $immediate = false, ?\Closure $accepted = null) : SendResult{
 		if($this->state !== ConnectionState::OPEN){
-			if($accepted !== null){ $accepted(false); }
+			$this->complete($accepted, false);
 			return SendResult::DROPPED;
 		}
 		try{
@@ -303,19 +306,19 @@ final class PeerConnection implements SignalingPeerConnection{
 			}
 		}catch(\Throwable $e){
 			if($e instanceof TransportException && $e->errorCode === 'payload_too_large'){
-				if($accepted !== null){ $accepted(false); }
+				$this->complete($accepted, false);
 				return SendResult::DROPPED;
 			}
-			try{ $this->fail($e); }finally{ if($accepted !== null){ $accepted(false); } }
+			try{ $this->fail($e); }finally{ $this->complete($accepted, false); }
 			return SendResult::DROPPED;
 		}
 		if($channel === Channel::UNRELIABLE){
-			if($accepted !== null){ $accepted($sent); }
+			$this->complete($accepted, $sent);
 			return $sent ? SendResult::ACCEPTED : SendResult::DROPPED;
 		}
 		$bytes = strlen($payload);
 		if($bytes > $this->config->maxOutgoingQueueBytes - $this->outgoingBytes || $this->outgoing->count() >= $this->config->maxOutgoingQueueMessages || !$this->budget->reserve($bytes)){
-			if($accepted !== null){ $accepted(false); }
+			$this->complete($accepted, false);
 			return SendResult::BACKPRESSURE;
 		}
 		$this->outgoingBytes += $bytes;
@@ -346,12 +349,31 @@ final class PeerConnection implements SignalingPeerConnection{
 					$this->outgoingBytes -= $entry['bytes'];
 					$this->budget->release($entry['bytes']);
 					unset($entry['frames']);
-					if($entry['complete'] !== null){ ($entry['complete'])(true); }
+					$this->complete($entry['complete'], true);
 				}
 			}
 		}finally{
 			$this->flushing = false;
 		}
+	}
+
+	private function notify(\Closure $callback) : void{
+		try{ $callback(); }catch(TransportCleanupException $e){
+			throw $e;
+		}catch(\Throwable $e){
+			$this->reportCallbackError($e);
+			$this->terminate('callback_error', 'Consumer callback failed');
+		}
+	}
+
+	/** @param \Closure(bool): void|null $callback */
+	private function complete(?\Closure $callback, bool $success) : void{
+		if($callback !== null){ $this->notify(static fn() => $callback($success)); }
+	}
+
+	private function reportCallbackError(\Throwable $error) : void{
+		// never log peer data
+		error_log('NetherNet consumer callback failed (' . get_class($error) . ')');
 	}
 
 	private function fail(\Throwable $error) : void{
@@ -383,13 +405,21 @@ final class PeerConnection implements SignalingPeerConnection{
 		$this->codec->reset();
 		$this->state = ConnectionState::CLOSED;
 		($this->closed)($this->id);
-		$error = null;
-		try{ if($cancel !== null){ $cancel(); } }catch(\Throwable $e){ $error = $e; }
-		try{ if($peer !== null){ $peer->close(); } }catch(\Throwable $e){ $error ??= $e; }
+		$backendError = null;
+		$callbackError = null;
+		try{ if($cancel !== null){ $cancel(); } }
+		catch(TransportCleanupException $e){ $backendError = $e; }
+		catch(\Throwable $e){ $callbackError = $e; $this->reportCallbackError($e); }
+		try{ if($peer !== null){ $peer->close(); } }catch(\Throwable $e){ $backendError = $e; }
 		foreach($callbacks as $callback){
-			try{ $callback(false); }catch(\Throwable $e){ $error ??= $e; }
+			try{ $callback(false); }
+			catch(TransportCleanupException $e){ $backendError ??= $e; }
+			catch(\Throwable $e){ $callbackError ??= $e; $this->reportCallbackError($e); }
 		}
-		try{ $this->listener->onClose($this->id, $code, $reason); }catch(\Throwable $e){ $error ??= $e; }
-		if($error !== null){ throw $error; }
+		if($code === 'local_close' && $callbackError !== null){ $code = 'callback_error'; $reason = 'Consumer callback failed during close'; }
+		try{ $this->listener->onClose($this->id, $code, $reason); }
+		catch(TransportCleanupException $e){ $backendError ??= $e; }
+		catch(\Throwable $e){ $this->reportCallbackError($e); }
+		if($backendError !== null){ throw $backendError instanceof TransportCleanupException ? $backendError : new TransportCleanupException($backendError); }
 	}
 }

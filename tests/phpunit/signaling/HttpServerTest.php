@@ -550,15 +550,17 @@ final class HttpServerTest extends TestCase{
 		self::assertSame(0, $this->server->getConnectionCount());
 	}
 
-	public function testConsumerAnswerExceptionPropagatesAndHttpCleanupCancelsPeer() : void{
+	public function testConsumerAnswerExceptionRejectsOnlyPeerAndHttpRemainsUsable() : void{
 		$this->peer->open = false;
 		$socket = $this->client();
 		$this->send($socket, $this->post($this->fixture->offer(FakePeer::SDP)));
 		$this->listener->answered = static function(int $id) : void{ throw new \RuntimeException('consumer failed'); };
-		try{
-			for($i = 0; $i < 100; ++$i){ $this->transport->poll(); $this->server->poll(1000); }
-			self::fail('Consumer exception did not propagate');
-		}catch(\RuntimeException $e){ self::assertSame('consumer failed', $e->getMessage()); }
+		self::assertStringStartsWith('HTTP/1.1 500 ', $this->response($socket));
+		self::assertSame('callback_error', $this->listener->closed[0][1]);
+		self::assertCount(1, $this->listener->closed);
+		$healthy = $this->client();
+		$this->send($healthy, "GET /v1/join HTTP/1.1\r\nHost: test\r\n\r\n");
+		self::assertStringStartsWith('HTTP/1.1 200 ', $this->response($healthy));
 		$this->server->stop();
 		self::assertSame(1, $this->peer->closes);
 		self::assertSame(0, $this->server->getConnectionCount());

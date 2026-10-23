@@ -19,6 +19,7 @@ final class FakePeer implements WebRtcPeer{
 	public ?string $localSdp = self::SDP;
 	public int $capacity = 8;
 	public int $closes = 0;
+	public ?\Throwable $closeFailure = null;
 	public ?string $remoteSdp = null;
 	public ?TransportException $failure = null;
 	/** @var list<array{Channel, string}> */
@@ -50,5 +51,9 @@ final class FakePeer implements WebRtcPeer{
 	public function receiveFrame(Channel $channel) : ?string{
 		return isset($this->incoming[$channel->name]) ? array_shift($this->incoming[$channel->name]) : null;
 	}
-	public function close() : void{ ++$this->closes; $this->state = 'CLOSED'; }
+	public function close() : void{
+		++$this->closes;
+		$this->state = 'CLOSED';
+		if($this->closeFailure !== null){ throw $this->closeFailure; }
+	}
 }

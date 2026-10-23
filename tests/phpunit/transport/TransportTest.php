@@ -315,10 +315,11 @@ final class TransportTest extends TestCase{
 		$results->values = [];
 		$connection->send('one', accepted: static function(bool $ok) : void{ throw new \LogicException('consumer'); });
 		$connection->send('two', accepted: function(bool $ok) use ($results) : void{ $results->values[] = $ok; });
-		try{ $connection->close(); self::fail('Missing consumer exception'); }catch(\LogicException $error){ self::assertSame('consumer', $error->getMessage()); }
+		$connection->close();
 		self::assertSame([false], $results->values);
 		self::assertSame(ConnectionState::CLOSED, $connection->getState());
 		self::assertCount(1, $this->listener->closed);
+		self::assertSame('callback_error', $this->listener->closed[0][1]);
 		self::assertSame(1, $this->peer->closes);
 	}
 

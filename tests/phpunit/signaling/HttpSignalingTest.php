@@ -186,12 +186,14 @@ final class HttpSignalingTest extends TestCase{
 		$post = $this->post();
 		$this->listener->answered = static function(int $id) : void{ throw new \RuntimeException('consumer secret'); };
 		$this->transport->poll();
-		try{ $this->transport->poll(); self::fail('Expected consumer exception'); }catch(\RuntimeException $e){ self::assertSame('consumer secret', $e->getMessage()); }
+		$this->transport->poll();
 		$this->http->onAnswer(1, 'duplicate');
 		$response = $this->http->takeResponse($post);
 		self::assertNotNull($response);
-		self::assertSame(200, $response->status);
-		self::assertStringStartsWith('v=0', $response->body);
+		self::assertSame(500, $response->status);
+		self::assertSame('Internal Server Error', $response->body);
+		self::assertSame('callback_error', $this->listener->closed[0][1]);
+		self::assertSame(1, $this->peer->closes);
 		self::assertNull($this->http->takeResponse($post));
 		$this->http->cancel($post);
 	}
@@ -327,7 +329,7 @@ final class HttpSignalingTest extends TestCase{
 		$this->http->bind($this->transport);
 		$one = $this->post();
 		$two = $this->post();
-		try{ $this->http->stop(); self::fail('Expected consumer exception'); }catch(\RuntimeException $e){ self::assertSame('trusted consumer failure', $e->getMessage()); }
+		$this->http->stop();
 		self::assertSame(HttpState::CLOSED, $this->http->getState($one));
 		self::assertSame(HttpState::CLOSED, $this->http->getState($two));
 		$this->http->stop();
@@ -446,7 +448,7 @@ final class HttpSignalingTest extends TestCase{
 		$this->transport->poll();
 		$this->transport->poll();
 		$this->peer->state = 'FAILED';
-		try{ $this->transport->poll(); self::fail('Expected consumer exception'); }catch(\RuntimeException $e){ self::assertSame('SECRET-CONSUMER', $e->getMessage()); }
+		$this->transport->poll();
 		$response = $this->http->takeResponse($post);
 		self::assertNotNull($response);
 		self::assertSame(500, $response->status);

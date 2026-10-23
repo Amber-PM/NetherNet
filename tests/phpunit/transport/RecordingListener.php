@@ -25,6 +25,8 @@ final class RecordingListener implements TransportListener{
 	public ?\Closure $answered = null;
 	/** @var \Closure(Connection): void|null */
 	public ?\Closure $received = null;
+	/** @var \Closure(int): void|null */
+	public ?\Closure $closing = null;
 
 	public function onAnswer(int $id, string $answerSdp) : void{
 		$this->events[] = 'answer';
@@ -43,5 +45,6 @@ final class RecordingListener implements TransportListener{
 	public function onClose(int $id, string $code, string $reason) : void{
 		$this->events[] = 'close';
 		$this->closed[] = [$id, $code, $reason];
+		if($this->closing !== null){ ($this->closing)($id); }
 	}
 }
