@@ -53,6 +53,11 @@ final class ExtWebRtcPeerTest extends TestCase{
 		$this->peers[] = $offer;
 		$answer = new ExtWebRtcPeer($answerConfig ?? new TransportConfig());
 		$this->peers[] = $answer;
+		$this->connect($offer, $answer);
+		return [$offer, $answer];
+	}
+
+	private function connect(ExtWebRtcPeer $offer, ExtWebRtcPeer $answer) : void{
 		$offer->createChannel(Channel::RELIABLE);
 		$offer->createChannel(Channel::UNRELIABLE);
 		self::waitFor(fn() => $offer->isGatheringComplete());
@@ -68,7 +73,84 @@ final class ExtWebRtcPeerTest extends TestCase{
 			return $offer->isChannelOpen(Channel::RELIABLE) && $offer->isChannelOpen(Channel::UNRELIABLE) &&
 				$answer->isChannelOpen(Channel::RELIABLE) && $answer->isChannelOpen(Channel::UNRELIABLE);
 		});
-		return [$offer, $answer];
+	}
+
+	public function testBoundedUdpCandidatesAndDataExchange() : void{
+		$offer = new ExtWebRtcPeer(new TransportConfig(), 19300, 19310, '127.0.0.1');
+		$this->peers[] = $offer;
+		$answer = new ExtWebRtcPeer(new TransportConfig(), 19311, 19320, '127.0.0.1');
+		$this->peers[] = $answer;
+		$this->connect($offer, $answer);
+		$this->assertUdpCandidates($offer, 19300, 19310);
+		$this->assertUdpCandidates($answer, 19311, 19320);
+		$this->assertBidirectionalDelivery($offer, $answer, 'bounded');
+	}
+
+	public function testFixedUdpMuxServesTwoConcurrentPeers() : void{
+		for($i = 0; $i < 2; ++$i){
+			$offer = new ExtWebRtcPeer(new TransportConfig(), 19321, 19330, '127.0.0.1');
+			$this->peers[] = $offer;
+			$answer = new ExtWebRtcPeer(new TransportConfig(), 19331, 19331, '127.0.0.1', true);
+			$this->peers[] = $answer;
+			$this->connect($offer, $answer);
+			$this->assertUdpCandidates($answer, 19331, 19331);
+		}
+		$this->assertBidirectionalDelivery($this->peers[0], $this->peers[1], 'first');
+		$this->assertBidirectionalDelivery($this->peers[2], $this->peers[3], 'second');
+	}
+
+	public function testOccupiedFixedUdpPortFailsWithoutEscapingRange() : void{
+		$socket = stream_socket_server('udp://127.0.0.1:19332', $errorCode, $errorMessage, STREAM_SERVER_BIND);
+		self::assertIsResource($socket, $errorMessage ?? 'Unable to reserve UDP test port');
+		try{
+			$peer = new ExtWebRtcPeer(new TransportConfig(), 19332, 19332, '127.0.0.1');
+			$this->peers[] = $peer;
+			$this->expectException(TransportException::class);
+			$peer->createChannel(Channel::RELIABLE);
+		}finally{
+			fclose($socket);
+		}
+	}
+
+	/** @return iterable<string, array{string}> */
+	public static function unavailableBindAddresses() : iterable{
+		yield 'IPv4' => ['192.0.2.1'];
+		yield 'IPv6' => ['2001:db8::1'];
+	}
+
+	#[DataProvider('unavailableBindAddresses')]
+	public function testUnavailableBindFailsWithoutUsingAnotherInterface(string $bindAddress) : void{
+		$peer = new ExtWebRtcPeer(new TransportConfig(), 19333, 19333, $bindAddress);
+		$this->peers[] = $peer;
+		$this->expectException(TransportException::class);
+		$peer->createChannel(Channel::RELIABLE);
+	}
+
+	private function assertUdpCandidates(ExtWebRtcPeer $peer, int $begin, int $end) : void{
+		$sdp = $peer->getLocalDescription();
+		self::assertNotNull($sdp);
+		preg_match_all('/^a=candidate:\\S+ \\d+ (\\S+) \\d+ (\\S+) (\\d+) typ host/m', $sdp, $matches, PREG_SET_ORDER);
+		self::assertNotEmpty($matches);
+		foreach($matches as $candidate){
+			self::assertSame('UDP', strtoupper($candidate[1]));
+			self::assertSame('127.0.0.1', $candidate[2]);
+			self::assertGreaterThanOrEqual($begin, (int) $candidate[3]);
+			self::assertLessThanOrEqual($end, (int) $candidate[3]);
+		}
+	}
+
+	private function assertBidirectionalDelivery(ExtWebRtcPeer $offer, ExtWebRtcPeer $answer, string $prefix) : void{
+		self::assertSame('CONNECTED', $offer->getState());
+		self::assertSame('CONNECTED', $answer->getState());
+		foreach([Channel::RELIABLE, Channel::UNRELIABLE] as $channel){
+			$payload = $prefix . "\x00\xff" . $channel->name;
+			self::assertTrue($offer->sendFrame($channel, $payload));
+			self::waitFor(fn() => $answer->peekFrame($channel) !== null);
+			self::assertSame($payload, $answer->receiveFrame($channel));
+			self::assertTrue($answer->sendFrame($channel, $payload));
+			self::waitFor(fn() => $offer->peekFrame($channel) !== null);
+			self::assertSame($payload, $offer->receiveFrame($channel));
+		}
 	}
 
 	public function testBinaryMessagesBothChannelsAndNegotiatedCapacity() : void{

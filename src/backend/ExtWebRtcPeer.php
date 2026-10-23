@@ -31,7 +31,7 @@ final class ExtWebRtcPeer implements WebRtcPeer{
 			throw new TransportException('backend_incompatible', 'Expected ext-webrtc 0.3.0 with libdatachannel 0.24.5');
 		}
 		$required = [
-			PeerConnectionOptions::class => ['create', 'setMaxMessageSize', 'setMaxReceiveQueueSize', 'setMaxReceiveQueueMessages', 'setMaxSendQueueSize', 'setMaxRemoteDescriptionSize', 'setMaxPendingDataChannels', 'setIceTcpEnabled'],
+			PeerConnectionOptions::class => ['create', 'setMaxMessageSize', 'setMaxReceiveQueueSize', 'setMaxReceiveQueueMessages', 'setMaxSendQueueSize', 'setMaxRemoteDescriptionSize', 'setMaxPendingDataChannels', 'setIceTcpEnabled', 'setPortRange', 'setBindAddress', 'setIceUdpMuxEnabled'],
 			PeerConnection::class => ['__construct', 'setRemoteOffer', 'setRemoteAnswer', 'getGatheringState', 'getLocalDescription', 'getState', 'getFailureState', 'getRemoteFingerprint', 'createDataChannel', 'pollDataChannels', 'close'],
 			DataChannelOptions::class => ['create', 'setUnordered', 'setMaxRetransmits'],
 			DataChannel::class => ['getLabel', 'getProtocol', 'isOpen', 'isClosed', 'isUnordered', 'getMaxRetransmits', 'getMaxPacketLifeTime', 'getMaxMessageSize', 'getBufferedAmount', 'getAvailableAmount', 'getQueuedMessageCount', 'send', 'peek', 'receive', 'close']
@@ -51,9 +51,15 @@ final class ExtWebRtcPeer implements WebRtcPeer{
 		}
 	}
 
-	public function __construct(private readonly TransportConfig $config){
+	public function __construct(private readonly TransportConfig $config, int $icePortBegin = 0, int $icePortEnd = 0, ?string $bindAddress = null, bool $udpMux = false){
+		if(($icePortBegin !== 0 || $icePortEnd !== 0) && ($icePortBegin < 1 || $icePortEnd < $icePortBegin || $icePortEnd > 65535)){
+			throw new \InvalidArgumentException('ICE ports must both be zero, or an ordered range between 1 and 65535');
+		}
+		if($bindAddress !== null && filter_var($bindAddress, FILTER_VALIDATE_IP) === false){
+			throw new \InvalidArgumentException('ICE bind address must be a numeric IPv4 or IPv6 address');
+		}
 		self::assertAvailable();
-		$this->peer = $this->native(function() : PeerConnection{
+		$this->peer = $this->native(function() use ($icePortBegin, $icePortEnd, $bindAddress, $udpMux) : PeerConnection{
 			$options = PeerConnectionOptions::create()
 				->setMaxMessageSize($this->config->maxMessageBytes)
 				->setMaxReceiveQueueSize($this->config->maxReceiveQueueBytes)
@@ -61,7 +67,12 @@ final class ExtWebRtcPeer implements WebRtcPeer{
 				->setMaxSendQueueSize($this->config->maxSendQueueBytes)
 				->setMaxRemoteDescriptionSize($this->config->maxSdpBytes)
 				->setMaxPendingDataChannels($this->config->maxPendingChannels)
-				->setIceTcpEnabled(false);
+				->setIceTcpEnabled(false)
+				->setBindAddress($bindAddress)
+				->setIceUdpMuxEnabled($udpMux);
+			if($icePortBegin !== 0){
+				$options->setPortRange($icePortBegin, $icePortEnd);
+			}
 			return new PeerConnection($options);
 		});
 	}
