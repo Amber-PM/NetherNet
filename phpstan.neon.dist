@@ -7,11 +7,13 @@ parameters:
 	phpVersion: 80100
 	scanFiles:
 		- stubs/webrtc.stub
+		- stubs/rtc.stub
 	tmpDir: .cache/phpstan
 	paths:
 		- src
 		- tests/phpunit
 		- tests/native
+		- tests/rtc
 		- scripts/reflect-webrtc.php
 		- benchmarks
 	reportUnmatchedIgnoredErrors: true

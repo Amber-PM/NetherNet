@@ -25,6 +25,40 @@ also verifies the libdatachannel version and native API before listening.
 NetherNet stays transport-only; server packaging and operator trust provisioning
 belong to the embedding application.
 
+## Sending and callbacks
+
+`Connection::send()` returning `ACCEPTED` means local admission, not delivery.
+Its completion callback runs at most once: `true` when all frames reach the local
+backend, `false` on rejection or cancellation. Callback failures do not change
+admission or retry submitted frames; they close only the affected connection
+(`callback_error`). `onClose` runs once. Native cleanup errors still propagate.
+
+## ext-rtc backend (opt-in)
+
+`ExtRtcPeer` uses ext-rtc (`amber\rtc`, API version 1, libdatachannel 0.24.6).
+`ExtWebRtcPeer` remains the default. Opt in with a peer factory:
+
+```php
+$transport = new Transport($config, $identityHandler, $listener,
+	static fn() => new ExtRtcPeer($config, $icePortBegin, $icePortEnd, $bindAddress));
+```
+
+Limitations:
+
+- UDP mux is unsupported; each peer needs its own UDP port. Bind addresses must
+  exist locally; ext-rtc rejects ranges starting below 1024 and ending at 65535.
+- `sendFrame()` returning `false` indicates native send backpressure.
+- Composer still requires ext-webrtc 0.3.0, even with ext-rtc.
+- Do not load ext-rtc and ext-webrtc in the same PHP process.
+
+Run ext-rtc tests without ext-webrtc loaded. Interop runs ext-webrtc in a
+separate process:
+
+```bash
+php -d extension=/path/to/rtc.so vendor/bin/phpunit -c phpunit.rtc.xml.dist
+NETHERNET_WEBRTC_MODULE=/path/to/webrtc.so php -d extension=/path/to/rtc.so vendor/bin/phpunit -c phpunit.rtc.xml.dist --group interop
+```
+
 ## Development
 
 With the native backend installed, run tests and analysis with Composer:

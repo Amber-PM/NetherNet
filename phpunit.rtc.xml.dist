@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
+	bootstrap="tests/rtc/bootstrap.php" cacheDirectory=".cache/phpunit-rtc"
+	failOnEmptyTestSuite="true" failOnWarning="true" failOnRisky="true"
+	failOnDeprecation="true" beStrictAboutOutputDuringTests="true">
+	<testsuites>
+		<testsuite name="rtc">
+			<directory suffix="Test.php">tests/rtc</directory>
+		</testsuite>
+	</testsuites>
+	<groups>
+		<exclude>
+			<group>interop</group>
+		</exclude>
+	</groups>
+</phpunit>

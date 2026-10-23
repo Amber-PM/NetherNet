@@ -1,0 +1,131 @@
+<?php
+
+// copied from ext-rtc 5c58abe stubs/rtc.stub.php and stubs/runtime.stub.php
+// Copyright (c) 2026 Amber-PM contributors, SPDX-License-Identifier: MIT
+// static analysis only, never autoload or require this file
+namespace amber\rtc;
+
+enum ConnectionState{
+	case NEW;
+	case CONNECTING;
+	case CONNECTED;
+	case DISCONNECTED;
+	case FAILED;
+	case CLOSED;
+}
+
+enum GatheringState{
+	case NEW;
+	case IN_PROGRESS;
+	case COMPLETE;
+}
+
+final class RtcException extends \RuntimeException{
+	public const INVALID_ARGUMENT = 1;
+	public const CLOSED = 2;
+	public const INVALID_STATE = 3;
+	public const INVALID_SDP = 4;
+	public const SDP_TOO_LARGE = 5;
+	public const PAYLOAD_TOO_LARGE = 6;
+	public const CANDIDATE_LIMIT = 7;
+	public const CHANNEL_LIMIT = 8;
+	public const RECEIVE_OVERFLOW = 9;
+	public const BUFFER_BUDGET = 10;
+	public const BACKEND_FAILURE = 11;
+	public const SHUTDOWN_FAILURE = 12;
+}
+
+final class IceServer{
+	private function __construct(){}
+	private function __clone(){}
+	public static function stun(string $host, int $port = 3478) : self{ throw new \LogicException('Contract stub only'); }
+	public static function turn(string $host, int $port, string $username, string $password, string $transport = 'udp') : self{ throw new \LogicException('Contract stub only'); }
+}
+
+final class IceCandidate{
+	public function __construct(string $candidate, string $mid){ throw new \LogicException('Contract stub only'); }
+	private function __clone(){}
+	public function getCandidate() : string{ throw new \LogicException('Contract stub only'); }
+	public function getMid() : string{ throw new \LogicException('Contract stub only'); }
+}
+
+final class PeerConnectionOptions{
+	private function __construct(){}
+	private function __clone(){}
+	public static function create() : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxMessageSize(int $bytes) : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxReceiveQueueSize(int $bytes) : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxReceiveQueueMessages(int $count) : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxSendQueueSize(int $bytes) : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxRemoteDescriptionSize(int $bytes) : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxPendingDataChannels(int $count) : self{ throw new \LogicException('Contract stub only'); }
+	public function setIceTcpEnabled(bool $enabled) : self{ throw new \LogicException('Contract stub only'); }
+	public function setPortRange(int $first, int $last) : self{ throw new \LogicException('Contract stub only'); }
+	public function setBindAddress(?string $ip) : self{ throw new \LogicException('Contract stub only'); }
+	public function setIceUdpMuxEnabled(bool $enabled) : self{ throw new \LogicException('Contract stub only'); }
+	public function setIceServers(IceServer ...$servers) : self{ throw new \LogicException('Contract stub only'); }
+}
+
+final class DataChannelOptions{
+	private function __construct(){}
+	private function __clone(){}
+	public static function create() : self{ throw new \LogicException('Contract stub only'); }
+	public function setUnordered(bool $enabled) : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxRetransmits(?int $count) : self{ throw new \LogicException('Contract stub only'); }
+	public function setMaxPacketLifeTime(?int $milliseconds) : self{ throw new \LogicException('Contract stub only'); }
+	public function setProtocol(string $protocol) : self{ throw new \LogicException('Contract stub only'); }
+}
+
+final class PeerConnection{
+	public function __construct(PeerConnectionOptions $options){ throw new \LogicException('Contract stub only'); }
+	private function __clone(){}
+	public function setRemoteOffer(string $sdp) : void{ throw new \LogicException('Contract stub only'); }
+	public function setRemoteAnswer(string $sdp) : void{ throw new \LogicException('Contract stub only'); }
+	public function getGatheringState() : GatheringState{ throw new \LogicException('Contract stub only'); }
+	public function getLocalDescription() : ?string{ throw new \LogicException('Contract stub only'); }
+	public function getState() : ConnectionState{ throw new \LogicException('Contract stub only'); }
+	public function getFailureState() : ?ConnectionState{ throw new \LogicException('Contract stub only'); }
+	public function getRemoteFingerprint() : ?string{ throw new \LogicException('Contract stub only'); }
+	public function createDataChannel(string $label, ?DataChannelOptions $options = null) : DataChannel{ throw new \LogicException('Contract stub only'); }
+	/** @return list<DataChannel> */
+	public function pollDataChannels() : array{ throw new \LogicException('Contract stub only'); }
+	/** @return list<IceCandidate> */
+	public function pollLocalCandidates() : array{ throw new \LogicException('Contract stub only'); }
+	public function addRemoteCandidate(IceCandidate $candidate) : void{ throw new \LogicException('Contract stub only'); }
+	public function getLocalAddress() : ?string{ throw new \LogicException('Contract stub only'); }
+	public function getRemoteAddress() : ?string{ throw new \LogicException('Contract stub only'); }
+	/** @return array{rttMs: ?int, bytesSent: int, bytesReceived: int, receiveQueueBytes: int, receiveQueueMessages: int, sendQueueBytes: int, receiveOverflowCount: int, sendRejectedCount: int} */
+	public function getStats() : array{ throw new \LogicException('Contract stub only'); }
+	public function close() : void{ throw new \LogicException('Contract stub only'); }
+}
+
+final class DataChannel{
+	private function __construct(){}
+	private function __clone(){}
+	public function getLabel() : string{ throw new \LogicException('Contract stub only'); }
+	public function getProtocol() : string{ throw new \LogicException('Contract stub only'); }
+	public function isOpen() : bool{ throw new \LogicException('Contract stub only'); }
+	public function isClosed() : bool{ throw new \LogicException('Contract stub only'); }
+	public function isUnordered() : bool{ throw new \LogicException('Contract stub only'); }
+	public function getMaxRetransmits() : ?int{ throw new \LogicException('Contract stub only'); }
+	public function getMaxPacketLifeTime() : ?int{ throw new \LogicException('Contract stub only'); }
+	public function getMaxMessageSize() : int{ throw new \LogicException('Contract stub only'); }
+	public function getBufferedAmount() : int{ throw new \LogicException('Contract stub only'); }
+	public function getAvailableAmount() : int{ throw new \LogicException('Contract stub only'); }
+	public function getQueuedMessageCount() : int{ throw new \LogicException('Contract stub only'); }
+	public function send(string $payload) : bool{ throw new \LogicException('Contract stub only'); }
+	public function peek() : ?string{ throw new \LogicException('Contract stub only'); }
+	public function receive() : ?string{ throw new \LogicException('Contract stub only'); }
+	public function close() : void{ throw new \LogicException('Contract stub only'); }
+}
+
+final class RtcRuntime{
+	private function __construct(){}
+	private function __clone(){}
+	public static function getVersion() : string{ throw new \LogicException('Contract stub only'); }
+	public static function getApiVersion() : int{ throw new \LogicException('Contract stub only'); }
+	/** @return array{nativeBootstrap: bool, peerConnection: bool, dataChannels: bool, trickleIce: bool, observedRemoteFingerprint: bool, media: bool} */
+	public static function getCapabilities() : array{ throw new \LogicException('Contract stub only'); }
+	/** @return array{activePeers: int, activeChannels: int, managedBufferBytes: int, receiveOverflowCount: int, sendRejectedCount: int} */
+	public static function getStats() : array{ throw new \LogicException('Contract stub only'); }
+}
