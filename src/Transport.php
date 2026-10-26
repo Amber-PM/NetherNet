@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace amber\nethernet;
 
-use amber\nethernet\backend\ExtWebRtcPeer;
+use amber\nethernet\backend\ExtRtcPeer;
 use amber\nethernet\backend\WebRtcPeer;
 use amber\nethernet\identity\IdentityHandler;
 use amber\nethernet\identity\SdpIdentity;
@@ -42,7 +42,7 @@ final class Transport{
 		if($config->maxMessageBytes > min($config->peerPollBytes, $config->globalPollBytes)){
 			throw new \InvalidArgumentException('Poll byte budgets must hold one maximum-size frame');
 		}
-		$this->factory = $factory ?? static fn() => new ExtWebRtcPeer($config);
+		$this->factory = $factory ?? static fn() => new ExtRtcPeer($config);
 		$this->clock = $clock ?? static fn() => hrtime(true) / 1_000_000_000;
 		$this->wallClock = $wallClock ?? static fn() => time();
 		$this->budget = new TransportBudget($config);

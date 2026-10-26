@@ -88,10 +88,10 @@ jobs:
             ${{ runner.os }}-php-${{ matrix.php }}-composer-
 
       - name: Install dependencies
-        run: composer install --ignore-platform-req=ext-webrtc --prefer-dist --no-interaction --no-progress
+        run: composer install --ignore-platform-req=ext-rtc --prefer-dist --no-interaction --no-progress
 
       - name: Run Composer check suite
-        # Backend-independent matrix; Native WebRTC CI checks platform requirements with ext-webrtc loaded.
+        # Backend-independent matrix; Native ext-rtc CI checks platform requirements with ext-rtc loaded.
         run: |
           composer validate --strict
           composer test
@@ -127,7 +127,7 @@ jobs:
             ${{ runner.os }}-php-8.1-composer-
 
       - name: Install dependencies
-        run: composer install --ignore-platform-req=ext-webrtc --prefer-dist --no-interaction --no-progress
+        run: composer install --ignore-platform-req=ext-rtc --prefer-dist --no-interaction --no-progress
 
       - name: Verify Composer autoloading
         run: composer dump-autoload --optimize --strict-psr --strict-ambiguous
@@ -161,10 +161,10 @@ jobs:
             ${{ runner.os }}-php-8.1-composer-lowest-
 
       - name: Install lowest dependencies
-        run: composer update --ignore-platform-req=ext-webrtc --prefer-lowest --prefer-dist --no-interaction --no-progress
+        run: composer update --ignore-platform-req=ext-rtc --prefer-lowest --prefer-dist --no-interaction --no-progress
 
       - name: Run Composer check suite
-        # Backend-independent matrix; Native WebRTC CI checks platform requirements with ext-webrtc loaded.
+        # Backend-independent matrix; Native ext-rtc CI checks platform requirements with ext-rtc loaded.
         run: |
           composer validate --strict
           composer test
@@ -202,7 +202,7 @@ jobs:
             ${{ runner.os }}-php-8.1-composer-
 
       - name: Install dependencies
-        run: composer install --ignore-platform-req=ext-webrtc --prefer-dist --no-interaction --no-progress
+        run: composer install --ignore-platform-req=ext-rtc --prefer-dist --no-interaction --no-progress
 
       - name: Run PHPUnit
         run: composer test

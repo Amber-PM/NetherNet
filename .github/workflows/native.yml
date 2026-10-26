@@ -59,9 +59,13 @@ jobs:
             ${{ runner.os }}-php-8.5-composer-
 
       - name: Install and validate library
+        # legacy ext-webrtc backend; ext-rtc is the required backend and must not load here
         run: |
-          composer install --prefer-dist --no-interaction --no-progress
-          composer check
+          composer install --ignore-platform-req=ext-rtc --prefer-dist --no-interaction --no-progress
+          composer validate --strict
+          composer test
+          composer analyse
+          composer bench:check
           composer dump-autoload --optimize --strict-psr --strict-ambiguous
 
       - name: Run real peer integration tests

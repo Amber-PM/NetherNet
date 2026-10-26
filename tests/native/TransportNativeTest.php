@@ -30,7 +30,7 @@ final class TransportNativeTest extends TestCase{
 		$fixture = new IdentityFixture();
 		$config = new TransportConfig(maxMessageBytes: 512);
 		$listener = new RecordingListener();
-		$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener);
+		$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener, static fn() : ExtWebRtcPeer => new ExtWebRtcPeer($config));
 		$client = new ExtWebRtcPeer($config);
 		try{
 			$client->createChannel(Channel::RELIABLE);
@@ -85,7 +85,7 @@ final class TransportNativeTest extends TestCase{
 		$fixture = new IdentityFixture();
 		$config = new TransportConfig();
 		$listener = new RecordingListener();
-		$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener);
+		$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener, static fn() : ExtWebRtcPeer => new ExtWebRtcPeer($config));
 		$client = new \pmmp\webrtc\PeerConnection(\pmmp\webrtc\PeerConnectionOptions::create());
 		$channels = [];
 		try{
@@ -114,7 +114,7 @@ final class TransportNativeTest extends TestCase{
 		$config = new TransportConfig();
 		for($cycle = 0; $cycle < 4; ++$cycle){
 			$listener = new RecordingListener();
-			$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener);
+			$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener, static fn() : ExtWebRtcPeer => new ExtWebRtcPeer($config));
 			$clients = [];
 			try{
 				for($index = 0; $index < 2; ++$index){

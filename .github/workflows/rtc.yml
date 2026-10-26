@@ -1,0 +1,135 @@
+name: Native ext-rtc
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  EXT_RTC_REPOSITORY: Amber-PM/ext-rtc
+  EXT_RTC_REF: e57c53411d4145fd8ea1504ccb1e2af239a04c29
+
+jobs:
+  linux:
+    name: ext-rtc backend (PHP ${{ matrix.php }} ${{ matrix.mode }})
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4.27', '8.5.12']
+        mode: [nts, zts]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check out pinned ext-rtc
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.EXT_RTC_REPOSITORY }}
+          ref: ${{ env.EXT_RTC_REF }}
+          path: .ext-rtc
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build git pkg-config autoconf automake libtool libxml2-dev libonig-dev
+          test "$(git -C .ext-rtc rev-parse HEAD)" = "$EXT_RTC_REF"
+
+      - name: Cache locked re2c package
+        uses: actions/cache@v6
+        with:
+          path: .ext-rtc/.build/re2c
+          key: rtc-re2c-${{ runner.os }}-${{ hashFiles('.ext-rtc/build/dependencies.lock.json') }}
+
+      - name: Build pinned OpenSSL and PHP with test extensions
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+          PHP_MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          cd .ext-rtc
+          bash scripts/prepare-re2c-linux.sh
+          export PATH="$PWD/.build/re2c/root/usr/bin:$PATH"
+          bash scripts/build-openssl.sh
+          ssl="$PWD/.build/openssl"
+          # same tarball and checksum as ext-rtc, plus the extensions phpunit and composer need
+          sha="$(grep -oP "^\s*$PHP_VERSION\) sha=\K[0-9a-f]{64}" scripts/build-php.sh)"
+          dir="$PWD/.build/php-test-$PHP_VERSION-$PHP_MODE"
+          mkdir -p "$dir/source"
+          curl --fail --location --output "$dir/php.tar.xz" "https://www.php.net/distributions/php-$PHP_VERSION.tar.xz"
+          echo "$sha  $dir/php.tar.xz" | sha256sum --check
+          tar -xJf "$dir/php.tar.xz" -C "$dir/source" --strip-components=1
+          zts=--disable-zts; [[ "$PHP_MODE" = zts ]] && zts=--enable-zts
+          cd "$dir/source"
+          PKG_CONFIG_PATH="$ssl/lib/pkgconfig" LDFLAGS="-Wl,-rpath,$ssl/lib" ./configure --prefix="$dir/install" --disable-all --enable-cli --disable-cgi --disable-phpdbg --without-pear \
+            --with-openssl --with-libxml --enable-dom --enable-xml --enable-xmlwriter --enable-xmlreader --enable-simplexml --enable-tokenizer \
+            --enable-mbstring --enable-ctype --enable-filter --enable-phar --with-iconv "$zts" > "$dir/configure.log" 2>&1
+          make -j4 > "$dir/make.log" 2>&1
+          make install > "$dir/install.log" 2>&1
+          "$dir/install/bin/php" -n -r 'foreach(["openssl","dom","mbstring","tokenizer","xmlwriter","phar"] as $e){ if(!extension_loaded($e)){ fwrite(STDERR, "missing $e\n"); exit(1); } } echo PHP_VERSION, PHP_ZTS ? " ZTS" : " NTS", "\n";'
+          echo "RTC_PHP=$dir/install/bin/php" >> "$GITHUB_ENV"
+          echo "RTC_PHP_BIN=$dir/install/bin" >> "$GITHUB_ENV"
+
+      - name: Build ext-rtc for this PHP
+        run: |
+          set -euo pipefail
+          cd .ext-rtc
+          export PKG_CONFIG_PATH="$PWD/.build/openssl/lib/pkgconfig"
+          bash scripts/build-linux.sh --php "$RTC_PHP" --php-config "$RTC_PHP_BIN/php-config" --phpize "$RTC_PHP_BIN/phpize" --build-dir "$PWD/.build/rtc"
+          echo "RTC_MODULE=$PWD/.build/rtc/extension/modules/rtc.so" >> "$GITHUB_ENV"
+
+      - name: ext-rtc PHPT, native lifecycle and teardown on this artifact
+        run: |
+          export PATH="$PWD/.ext-rtc/.build/re2c/root/usr/bin:$PATH"
+          bash .ext-rtc/scripts/test-linux.sh "$RTC_PHP" "$PWD/.ext-rtc/.build/rtc"
+
+      - name: Install library
+        run: |
+          composer install --ignore-platform-req=ext-rtc --prefer-dist --no-interaction --no-progress
+          "$RTC_PHP" -n -d "extension=$RTC_MODULE" "$(command -v composer)" check-platform-reqs --no-interaction
+          "$RTC_PHP" -n -d "extension=$RTC_MODULE" "$(command -v composer)" validate --strict
+
+      - name: Unit tests, analysis and benchmark bootstrap with ext-rtc loaded
+        run: |
+          "$RTC_PHP" -n -d "extension=$RTC_MODULE" -d memory_limit=1G vendor/bin/phpunit --configuration phpunit.xml.dist --do-not-cache-result
+          "$RTC_PHP" -n -d "extension=$RTC_MODULE" vendor/bin/phpstan analyse --configuration phpstan.neon.dist --no-progress --memory-limit=1G
+          "$RTC_PHP" -n -d "extension=$RTC_MODULE" benchmarks/bootstrap.php
+
+      - name: Real ext-rtc transport tests
+        run: |
+          "$RTC_PHP" -n -d "extension=$RTC_MODULE" vendor/bin/phpunit --configuration phpunit.rtc.xml.dist --fail-on-skipped --do-not-cache-result
+
+      - name: Interop with ext-webrtc client in a separate process
+        if: matrix.php == '8.5.12' && matrix.mode == 'nts'
+        run: |
+          set -euo pipefail
+          export PATH="$RTC_PHP_BIN:$PATH" PKG_CONFIG_PATH="$PWD/.ext-rtc/.build/openssl/lib/pkgconfig"
+          bash scripts/build-webrtc.sh "$RUNNER_TEMP/nethernet-webrtc"
+          NETHERNET_WEBRTC_MODULE="$RUNNER_TEMP/nethernet-webrtc/ext-webrtc/modules/webrtc.so" \
+            "$RTC_PHP" -n -d "extension=$RTC_MODULE" vendor/bin/phpunit --configuration phpunit.rtc.xml.dist --group interop --fail-on-skipped --do-not-cache-result
+
+      - name: Verify clean working tree
+        run: git diff --exit-code
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: ext-rtc-logs-${{ matrix.php }}-${{ matrix.mode }}
+          retention-days: 7
+          path: |
+            .ext-rtc/.build/rtc/logs/
+            .ext-rtc/.build/php-test-*/configure.log
+            .ext-rtc/.build/php-test-*/make.log
+            .ext-rtc/tests/*.diff
+            .ext-rtc/tests/*.out

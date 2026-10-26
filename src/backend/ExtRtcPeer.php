@@ -31,7 +31,7 @@ final class ExtRtcPeer implements WebRtcPeer{
 		$required = [
 			RtcRuntime::class => ['getApiVersion', 'getCapabilities'],
 			RtcException::class => [],
-			PeerConnectionOptions::class => ['create', 'setMaxMessageSize', 'setMaxReceiveQueueSize', 'setMaxReceiveQueueMessages', 'setMaxSendQueueSize', 'setMaxRemoteDescriptionSize', 'setMaxPendingDataChannels', 'setIceTcpEnabled', 'setPortRange', 'setBindAddress'],
+			PeerConnectionOptions::class => ['create', 'setMaxMessageSize', 'setMaxReceiveQueueSize', 'setMaxReceiveQueueMessages', 'setMaxSendQueueSize', 'setMaxRemoteDescriptionSize', 'setMaxPendingDataChannels', 'setIceTcpEnabled', 'setPortRange', 'setBindAddress', 'setIceUdpMuxEnabled'],
 			PeerConnection::class => ['__construct', 'setRemoteOffer', 'setRemoteAnswer', 'getGatheringState', 'getLocalDescription', 'getState', 'getFailureState', 'getRemoteFingerprint', 'createDataChannel', 'pollDataChannels', 'close'],
 			DataChannelOptions::class => ['create', 'setUnordered', 'setMaxRetransmits'],
 			DataChannel::class => ['getLabel', 'getProtocol', 'isOpen', 'isClosed', 'isUnordered', 'getMaxRetransmits', 'getMaxPacketLifeTime', 'getMaxMessageSize', 'getBufferedAmount', 'getAvailableAmount', 'getQueuedMessageCount', 'send', 'peek', 'receive', 'close']
@@ -73,12 +73,11 @@ final class ExtRtcPeer implements WebRtcPeer{
 		if($bindAddress !== null && filter_var($bindAddress, FILTER_VALIDATE_IP) === false){
 			throw new \InvalidArgumentException('ICE bind address must be a numeric IPv4 or IPv6 address');
 		}
-		// extra positional args are silently dropped by php, so reject explicitly
 		if($udpMux){
-			throw new TransportException('backend_unsupported', 'ext-rtc does not support ICE UDP mux');
+			self::assertMuxOptions($icePortBegin, $icePortEnd, $bindAddress, PHP_OS_FAMILY === 'Windows');
 		}
 		self::assertAvailable();
-		$this->peer = $this->native(function() use ($icePortBegin, $icePortEnd, $bindAddress) : PeerConnection{
+		$this->peer = $this->native(function() use ($icePortBegin, $icePortEnd, $bindAddress, $udpMux) : PeerConnection{
 			$options = PeerConnectionOptions::create()
 				->setMaxMessageSize($this->config->maxMessageBytes)
 				->setMaxReceiveQueueSize($this->config->maxReceiveQueueBytes)
@@ -87,12 +86,24 @@ final class ExtRtcPeer implements WebRtcPeer{
 				->setMaxRemoteDescriptionSize($this->config->maxSdpBytes)
 				->setMaxPendingDataChannels($this->config->maxPendingChannels)
 				->setIceTcpEnabled(false)
-				->setBindAddress($bindAddress);
+				->setBindAddress($bindAddress)
+				->setIceUdpMuxEnabled($udpMux);
 			if($icePortBegin !== 0){
 				$options->setPortRange($icePortBegin, $icePortEnd);
 			}
 			return new PeerConnection($options);
 		});
+	}
+
+	/** @throws \InvalidArgumentException */
+	public static function assertMuxOptions(int $icePortBegin, int $icePortEnd, ?string $bindAddress, bool $windows) : void{
+		if($icePortBegin === 0 || $icePortBegin !== $icePortEnd){
+			throw new \InvalidArgumentException('ICE UDP mux requires one fixed ICE port');
+		}
+		// pinned libjuice on windows can stall the next mux negotiation ~60s after a wildcard mux peer closes
+		if($windows && ($bindAddress === null || trim((string) inet_pton($bindAddress), "\0") === '')){
+			throw new \InvalidArgumentException('ICE UDP mux on Windows requires an explicit, non-wildcard ICE bind address');
+		}
 	}
 
 	/**
@@ -122,10 +133,21 @@ final class ExtRtcPeer implements WebRtcPeer{
 	}
 
 	public function setRemoteOffer(string $sdp) : void{
+		$sdp = self::withoutUnusableCandidates($sdp);
 		$this->native(fn() => $this->peer()->setRemoteOffer($sdp), 'negotiation_failed');
 	}
 	public function setRemoteAnswer(string $sdp) : void{
+		$sdp = self::withoutUnusableCandidates($sdp);
 		$this->native(fn() => $this->peer()->setRemoteAnswer($sdp), 'negotiation_failed');
+	}
+
+	// clients add tcp, mdns and rtcp (component 2, pion) candidates, ext-rtc rejects the whole sdp for them while ext-webrtc skipped them
+	// malformed lines are kept so the native validator still rejects them
+	private static function withoutUnusableCandidates(string $sdp) : string{
+		$filtered = preg_replace_callback('/^a=candidate:\S+ ([12]) (\S+) \d+ (\S+) [1-9]\d{0,4} typ (?:host|srflx|prflx|relay)(?: [^\r\n]*)?(?:\r?\n|$)/m', static function(array $match) : string{
+			return $match[1] === '1' && strtolower($match[2]) === 'udp' && filter_var($match[3], FILTER_VALIDATE_IP) !== false ? $match[0] : '';
+		}, $sdp);
+		return $filtered ?? throw new TransportException('negotiation_failed', 'Remote candidates could not be filtered');
 	}
 	public function isGatheringComplete() : bool{
 		return $this->native(fn() => $this->peer()->getGatheringState() === GatheringState::COMPLETE);

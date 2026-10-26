@@ -37,8 +37,8 @@ final class ExtRtcPeerTest extends TestCase{
 		}
 	}
 
-	private function peer(?TransportConfig $config = null, int $begin = 0, int $end = 0, ?string $bind = null) : ExtRtcPeer{
-		$peer = new ExtRtcPeer($config ?? new TransportConfig(), $begin, $end, $bind);
+	private function peer(?TransportConfig $config = null, int $begin = 0, int $end = 0, ?string $bind = null, bool $mux = false) : ExtRtcPeer{
+		$peer = new ExtRtcPeer($config ?? new TransportConfig(), $begin, $end, $bind, $mux);
 		$this->peers[] = $peer;
 		return $peer;
 	}
@@ -304,6 +304,199 @@ final class ExtRtcPeerTest extends TestCase{
 		}
 		self::deliver($offer, $answer, Channel::RELIABLE, "bounded\x00");
 		self::deliver($answer, $offer, Channel::UNRELIABLE, "bounded\xff");
+	}
+
+	public static function freeUdpPort(string $host = '127.0.0.1') : int{
+		// below the os ephemeral ranges, so later sockets cannot be handed the same port
+		for($attempt = 0; $attempt < 1000; ++$attempt){
+			$port = random_int(20000, 32000);
+			$probe = @stream_socket_server('udp://' . $host . ':' . $port, $code, $error, STREAM_SERVER_BIND);
+			if(is_resource($probe)){
+				fclose($probe);
+				return $port;
+			}
+		}
+		self::fail('No free UDP port');
+	}
+
+	/** @return list<string> */
+	public static function hostCandidates(string $sdp) : array{
+		preg_match_all('/^a=candidate:\S+ \d+ \S+ \d+ (\S+) (\d+) typ host/m', $sdp, $matches, PREG_SET_ORDER);
+		return array_map(static fn(array $m) : string => $m[1] . ':' . $m[2], $matches);
+	}
+
+	private static function assertNoPendingFrames(ExtRtcPeer ...$peers) : void{
+		foreach($peers as $peer){
+			foreach([Channel::RELIABLE, Channel::UNRELIABLE] as $channel){ self::assertNull($peer->peekFrame($channel)); }
+		}
+	}
+
+	public function testUdpMuxSharesOnePortAcrossIsolatedPeers() : void{
+		$port = self::freeUdpPort();
+		$offers = [];
+		$answers = [];
+		for($i = 0; $i < 3; ++$i){
+			$offers[$i] = $this->peer(null, 0, 0, '127.0.0.1');
+			$answers[$i] = $this->peer(null, $port, $port, '127.0.0.1', true);
+			self::connect($offers[$i], $answers[$i]);
+			self::assertSame(['127.0.0.1:' . $port], self::hostCandidates($answers[$i]->getLocalDescription() ?? ''));
+		}
+		self::assertCount(3, array_unique(array_map(static fn(ExtRtcPeer $peer) : string => $peer->getRemoteFingerprint() ?? '', $answers)));
+		foreach($answers as $i => $answer){
+			foreach([Channel::RELIABLE, Channel::UNRELIABLE] as $channel){
+				self::deliver($offers[$i], $answer, $channel, "to\x00$i" . $channel->name);
+				self::deliver($answer, $offers[$i], $channel, "from\xff$i" . $channel->name);
+			}
+		}
+		// late cross-peer delivery would show up here
+		usleep(100000);
+		self::assertNoPendingFrames(...$offers, ...$answers);
+		$answers[0]->close();
+		$offers[0]->close();
+		foreach([1, 2] as $i){
+			self::assertSame('CONNECTED', $answers[$i]->getState());
+			self::deliver($offers[$i], $answers[$i], Channel::RELIABLE, "after\x00leave$i");
+			self::deliver($answers[$i], $offers[$i], Channel::UNRELIABLE, "after\xffleave$i");
+		}
+		foreach([...$offers, ...$answers] as $peer){ $peer->close(); }
+		$this->peers = [];
+		self::waitFor(static fn() => RtcRuntime::getStats()['activePeers'] === 0);
+		// quick reconnects reuse the port while the previous shared socket may still be closing
+		for($round = 0; $round < 5; ++$round){
+			$offer = $this->peer(null, 0, 0, '127.0.0.1');
+			$answer = $this->peer(null, $port, $port, '127.0.0.1', true);
+			self::connect($offer, $answer);
+			self::assertSame(['127.0.0.1:' . $port], self::hostCandidates($answer->getLocalDescription() ?? ''));
+			self::deliver($offer, $answer, Channel::RELIABLE, "round\x00$round");
+			$offer->close();
+			$answer->close();
+		}
+	}
+
+	public function testUdpMuxConflictsFailConstructionExplicitly() : void{
+		$port = self::freeUdpPort();
+		$busy = stream_socket_server('udp://127.0.0.1:' . $port, $code, $error, STREAM_SERVER_BIND);
+		self::assertIsResource($busy);
+		try{
+			$this->assertNativeRejection($port, '127.0.0.1', 'ICE UDP mux port is unavailable');
+		}finally{
+			fclose($busy);
+		}
+		$first = $this->peer(null, $port, $port, '127.0.0.1', true);
+		$this->assertNativeRejection($port, '127.0.0.2', 'ICE UDP mux port is shared with a different bind address');
+		self::assertSame(1, RtcRuntime::getStats()['activePeers']);
+		$first->close();
+	}
+
+	private function assertNativeRejection(int $port, string $bind, string $message) : void{
+		try{
+			$this->peer(null, $port, $port, $bind, true);
+			self::fail('Conflicting mux peer accepted');
+		}catch(TransportException $e){
+			self::assertSame('backend_error', $e->errorCode);
+			self::assertSame($message, $e->getMessage());
+			self::assertInstanceOf(\amber\rtc\RtcException::class, $e->getPrevious());
+			self::assertSame(\amber\rtc\RtcException::INVALID_ARGUMENT, $e->getPrevious()->getCode());
+		}
+	}
+
+	public function testUdpMuxOverIpv6Loopback() : void{
+		$probe = @stream_socket_server('udp://[::1]:0', $code, $error, STREAM_SERVER_BIND);
+		if(!is_resource($probe)){ self::markTestSkipped('IPv6 loopback is unavailable'); }
+		fclose($probe);
+		$port = self::freeUdpPort('[::1]');
+		$offers = [];
+		$answers = [];
+		for($i = 0; $i < 2; ++$i){
+			$offers[$i] = $this->peer(null, 0, 0, '::1');
+			$answers[$i] = $this->peer(null, $port, $port, '::1', true);
+			self::connect($offers[$i], $answers[$i]);
+			self::assertSame(['::1:' . $port], self::hostCandidates($answers[$i]->getLocalDescription() ?? ''));
+		}
+		foreach($answers as $i => $answer){
+			self::deliver($offers[$i], $answer, Channel::RELIABLE, "v6\x00$i");
+			self::deliver($answer, $offers[$i], Channel::UNRELIABLE, "v6\xff$i");
+		}
+		self::assertNoPendingFrames(...$offers, ...$answers);
+	}
+
+	public function testTcpMdnsAndRtcpCandidatesInRemoteOfferAreSkipped() : void{
+		$offer = $this->peer(null, 0, 0, '127.0.0.1');
+		$offer->createChannel(Channel::RELIABLE);
+		$offer->createChannel(Channel::UNRELIABLE);
+		self::waitFor(fn() => $offer->isGatheringComplete());
+		// what libwebrtc clients add next to their udp host candidates
+		$extra = "a=candidate:2 1 tcp 1518280447 127.0.0.1 9 typ host tcptype active generation 0 network-id 1\r\n" .
+			"a=candidate:3 1 udp 2122194687 4b0bd1ec-0c4b-4f3e-9d8f-3c0e2f1a7b6d.local 50000 typ host generation 0\r\n" .
+			"a=candidate:4 1 TCP 1518280447 127.0.0.1 50001 typ host tcptype passive\r\n" .
+			"a=candidate:5 2 udp 2130706431 127.0.0.1 50002 typ host ufrag x\r\n";
+		$sdp = preg_replace('/^(a=candidate:[^\r\n]*\r?\n)/m', '$1' . $extra, $offer->getLocalDescription() ?? '', 1);
+		self::assertIsString($sdp);
+		self::assertStringContainsString('tcptype active', $sdp);
+		// the native validator alone rejects the whole description
+		$raw = new PeerConnection(PeerConnectionOptions::create());
+		try{
+			$raw->setRemoteOffer($sdp);
+			self::fail('Native accepted a tcp candidate');
+		}catch(\amber\rtc\RtcException $e){
+			self::assertSame(\amber\rtc\RtcException::INVALID_SDP, $e->getCode());
+		}finally{
+			$raw->close();
+		}
+		$answer = $this->peer(null, 0, 0, '127.0.0.1');
+		$answer->setRemoteOffer($sdp);
+		self::waitFor(fn() => $answer->isGatheringComplete());
+		$offer->setRemoteAnswer($answer->getLocalDescription() ?? self::fail('Missing answer'));
+		self::waitFor(function() use ($offer, $answer) : bool{
+			$answer->pollChannels();
+			return $offer->isChannelOpen(Channel::RELIABLE) && $answer->isChannelOpen(Channel::RELIABLE) && $answer->isChannelOpen(Channel::UNRELIABLE);
+		});
+		self::deliver($offer, $answer, Channel::RELIABLE, "tcp\x00skipped");
+		self::deliver($answer, $offer, Channel::UNRELIABLE, "mdns\xffskipped");
+	}
+
+	/** @return iterable<string, array{string}> */
+	public static function malformedCandidates() : iterable{
+		yield 'truncated' => ["a=candidate:2 1 udp 1 127.0.0.1\r\n"];
+		yield 'bad port' => ["a=candidate:2 1 udp 1 127.0.0.1 70000 typ host\r\n"];
+		yield 'unknown component' => ["a=candidate:2 3 udp 1 127.0.0.1 50000 typ host\r\n"];
+		yield 'zero port' => ["a=candidate:2 1 udp 1 127.0.0.1 0 typ host\r\n"];
+		yield 'bad type' => ["a=candidate:2 1 udp 1 127.0.0.1 50000 typ bogus\r\n"];
+	}
+
+	#[DataProvider('malformedCandidates')]
+	public function testMalformedCandidatesStillFailNegotiation(string $line) : void{
+		$offer = $this->peer();
+		$offer->createChannel(Channel::RELIABLE);
+		self::waitFor(fn() => $offer->isGatheringComplete());
+		$sdp = preg_replace('/^(a=candidate:[^\r\n]*\r?\n)/m', '$1' . $line, $offer->getLocalDescription() ?? '', 1);
+		self::assertIsString($sdp);
+		try{
+			$this->peer()->setRemoteOffer($sdp);
+			self::fail('Malformed candidate accepted');
+		}catch(TransportException $e){
+			self::assertSame('negotiation_failed', $e->errorCode);
+			self::assertInstanceOf(\amber\rtc\RtcException::class, $e->getPrevious());
+			self::assertSame(\amber\rtc\RtcException::INVALID_SDP, $e->getPrevious()->getCode());
+		}
+	}
+
+	public function testWindowsMuxRequiresExplicitBindBeforeNativeConstruction() : void{
+		if(PHP_OS_FAMILY !== 'Windows'){
+			// wildcard mux stays supported elsewhere
+			$this->peer(null, $port = self::freeUdpPort(), $port, null, true)->close();
+			self::assertSame(0, RtcRuntime::getStats()['activePeers']);
+			return;
+		}
+		foreach([null, '0.0.0.0', '::'] as $bind){
+			try{
+				$this->peer(null, 19133, 19133, $bind, true);
+				self::fail('Windows wildcard mux accepted');
+			}catch(\InvalidArgumentException $e){
+				self::assertStringContainsString('non-wildcard', $e->getMessage());
+			}
+		}
+		self::assertSame(0, RtcRuntime::getStats()['activePeers']);
 	}
 
 	/** @return iterable<string, array{int, int, ?string}> */

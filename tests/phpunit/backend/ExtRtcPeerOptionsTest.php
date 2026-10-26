@@ -6,7 +6,6 @@ namespace amber\nethernet\tests\backend;
 
 use amber\nethernet\backend\ExtRtcPeer;
 use amber\nethernet\TransportConfig;
-use amber\nethernet\TransportException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -30,13 +29,39 @@ final class ExtRtcPeerOptionsTest extends TestCase{
 		new ExtRtcPeer(new TransportConfig(), $begin, $end, $bind);
 	}
 
-	public function testUdpMuxIsRejectedInsteadOfIgnored() : void{
-		try{
-			new ExtRtcPeer(new TransportConfig(), 19133, 19133, '127.0.0.1', true);
-			self::fail('UDP mux request was accepted');
-		}catch(TransportException $e){
-			self::assertSame('backend_unsupported', $e->errorCode);
-		}
+	/** @return iterable<string, array{int, int, ?string, bool}> */
+	public static function invalidMuxOptions() : iterable{
+		yield 'ephemeral port' => [0, 0, '127.0.0.1', false];
+		yield 'port range' => [19133, 19134, '127.0.0.1', false];
+		yield 'windows default bind' => [19133, 19133, null, true];
+		yield 'windows IPv4 wildcard' => [19133, 19133, '0.0.0.0', true];
+		yield 'windows IPv6 wildcard' => [19133, 19133, '::', true];
+		yield 'windows expanded IPv6 wildcard' => [19133, 19133, '0:0:0:0:0:0:0:0', true];
+	}
+
+	#[DataProvider('invalidMuxOptions')]
+	public function testUnsafeMuxOptionsAreRejected(int $begin, int $end, ?string $bind, bool $windows) : void{
+		$this->expectException(\InvalidArgumentException::class);
+		ExtRtcPeer::assertMuxOptions($begin, $end, $bind, $windows);
+	}
+
+	/** @return iterable<string, array{?string, bool}> */
+	public static function validMuxOptions() : iterable{
+		yield 'linux default bind' => [null, false];
+		yield 'linux wildcard' => ['0.0.0.0', false];
+		yield 'windows IPv4' => ['127.0.0.1', true];
+		yield 'windows IPv6' => ['::1', true];
+	}
+
+	#[DataProvider('validMuxOptions')]
+	public function testFixedPortMuxOptionsAreAccepted(?string $bind, bool $windows) : void{
+		ExtRtcPeer::assertMuxOptions(19133, 19133, $bind, $windows);
+		$this->addToAssertionCount(1);
+	}
+
+	public function testMuxRangeIsRejectedBeforeNativeConstruction() : void{
+		$this->expectException(\InvalidArgumentException::class);
+		new ExtRtcPeer(new TransportConfig(), 19133, 19134, '127.0.0.1', true);
 	}
 
 	public function testMissingExtensionIsReportedWithoutAutoloadingNativeClasses() : void{

@@ -143,6 +143,65 @@ final class TransportExtRtcTest extends TestCase{
 		}
 	}
 
+	public function testUdpMuxTransportIsolatesConcurrentSessionsAndReconnects() : void{
+		$fixture = new IdentityFixture();
+		$config = new TransportConfig(maxMessageBytes: 512);
+		$port = ExtRtcPeerTest::freeUdpPort();
+		$listener = new RecordingListener();
+		$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener, static fn() : WebRtcPeer => new ExtRtcPeer($config, $port, $port, '127.0.0.1', true));
+		$codec = new FrameCodec($config);
+		/** @var array<int, ExtRtcPeer> $clients */
+		$clients = [];
+		$listener->answered = static function(int $id) use (&$clients, $listener, $config, $port) : void{
+			$answer = SdpIdentity::fromSdp($listener->answers[$id], $config)->sdpWithoutIdentity;
+			self::assertSame(['127.0.0.1:' . $port], ExtRtcPeerTest::hostCandidates($answer));
+			$clients[$id]->setRemoteAnswer($answer);
+		};
+		$join = static function(string $networkId) use (&$clients, $transport, $fixture, $config) : int{
+			$client = new ExtRtcPeer($config, 0, 0, '127.0.0.1');
+			$sdp = self::offer($client);
+			$id = $transport->accept($networkId, $fixture->offer($sdp, time()));
+			$clients[$id] = $client;
+			return $id;
+		};
+		$exchange = static function(int $id, int $round) use (&$clients, $transport, $listener, $codec) : void{
+			$client = $clients[$id];
+			ExtRtcPeerTest::waitFor(fn() => $client->isChannelOpen(Channel::RELIABLE) && $client->isChannelOpen(Channel::UNRELIABLE));
+			// fragmented reliable payload, tagged per session and round
+			$payload = str_repeat("\x00\xff$id:$round;", 300);
+			foreach($codec->encode($payload, 512) as $frame){ self::assertTrue($client->sendFrame(Channel::RELIABLE, $frame)); }
+			ExtRtcPeerTest::waitFor(function() use ($transport, $listener, $id, $payload) : bool{ $transport->poll(); return in_array([$id, $payload, Channel::RELIABLE], $listener->payloads, true); });
+			self::assertSame(SendResult::ACCEPTED, $listener->connections[$id]->send("reply\x00$id:$round", immediate: true));
+			ExtRtcPeerTest::waitFor(function() use ($transport, $client) : bool{ $transport->poll(); return $client->peekFrame(Channel::RELIABLE) !== null; });
+			self::assertSame("\0reply\x00$id:$round", $client->receiveFrame(Channel::RELIABLE));
+		};
+		try{
+			$ids = [];
+			for($i = 0; $i < 4; ++$i){ $ids[] = $join('mux-' . $i); }
+			ExtRtcPeerTest::waitFor(function() use ($transport, $listener) : bool{ $transport->poll(); self::assertSame([], $listener->closed); return count($listener->connections) === 4; });
+			foreach($ids as $id){ $exchange($id, 0); }
+			foreach($listener->payloads as [$id, $payload]){ self::assertStringStartsWith("\x00\xff$id:0;", $payload); }
+			self::assertCount(4, $listener->payloads);
+			foreach($clients as $client){ self::assertNull($client->peekFrame(Channel::RELIABLE)); }
+			// one player leaves and rejoins on the shared port
+			$clients[$ids[0]]->close();
+			ExtRtcPeerTest::waitFor(function() use ($transport, $listener) : bool{ $transport->poll(); return count($listener->closed) === 1; });
+			self::assertSame($ids[0], $listener->closed[0][0]);
+			$rejoined = $join('mux-0');
+			ExtRtcPeerTest::waitFor(function() use ($transport, $listener, $rejoined) : bool{ $transport->poll(); return isset($listener->connections[$rejoined]); });
+			$exchange($rejoined, 1);
+			foreach(array_slice($ids, 1) as $id){
+				self::assertSame(ConnectionState::OPEN, $listener->connections[$id]->getState());
+				$exchange($id, 1);
+			}
+			$transport->stop();
+			self::assertCount(5, $listener->closed);
+		}finally{
+			$transport->stop();
+			foreach($clients as $client){ $client->close(); }
+		}
+	}
+
 	public function testConcurrentNativeConnectionsAndRepeatedTransportShutdown() : void{
 		$fixture = new IdentityFixture();
 		$config = new TransportConfig();

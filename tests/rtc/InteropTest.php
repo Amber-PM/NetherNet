@@ -16,6 +16,7 @@ use amber\nethernet\tests\transport\RecordingListener;
 use amber\nethernet\Transport;
 use amber\nethernet\TransportConfig;
 use amber\rtc\RtcRuntime;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
@@ -60,12 +61,29 @@ final class InteropTest extends TestCase{
 		fflush($this->pipes[0]);
 	}
 
-	public function testExtRtcServerInteroperatesWithExtWebRtcClientInSeparateProcess() : void{
+	/** @return list<string> */
+	private static function clientCommand() : array{
+		// any executable speaking the support/webrtc-client.php line protocol, e.g. a pion client
+		$client = getenv('NETHERNET_INTEROP_CLIENT');
+		if(is_string($client) && $client !== ''){
+			self::assertFileExists($client);
+			return [$client];
+		}
 		$module = getenv('NETHERNET_WEBRTC_MODULE');
-		self::assertIsString($module, 'NETHERNET_WEBRTC_MODULE must name the ext-webrtc module');
+		self::assertIsString($module, 'NETHERNET_WEBRTC_MODULE must name the ext-webrtc module, or NETHERNET_INTEROP_CLIENT an interop client');
 		self::assertFileExists($module);
-		$command = [PHP_BINARY, '-n', '-d', 'extension=' . $module, __DIR__ . '/support/webrtc-client.php'];
-		$process = proc_open($command, [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
+		return [PHP_BINARY, '-n', '-d', 'extension=' . $module, __DIR__ . '/support/webrtc-client.php'];
+	}
+
+	/** @return iterable<string, array{bool}> */
+	public static function muxModes() : iterable{
+		yield 'own socket' => [false];
+		yield 'udp mux' => [true];
+	}
+
+	#[DataProvider('muxModes')]
+	public function testExtRtcServerInteroperatesWithIndependentClientInSeparateProcess(bool $mux) : void{
+		$process = proc_open(self::clientCommand(), [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
 		self::assertIsResource($process);
 		$this->process = $process;
 		$this->pipes = $pipes;
@@ -74,8 +92,11 @@ final class InteropTest extends TestCase{
 
 		$fixture = new IdentityFixture();
 		$config = new TransportConfig(maxMessageBytes: 512);
+		$port = ExtRtcPeerTest::freeUdpPort();
 		$listener = new RecordingListener();
-		$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener, static fn() : WebRtcPeer => new ExtRtcPeer($config));
+		$transport = new Transport($config, new ClientServerIdentityHandler($fixture->verifier(), $fixture->server), $listener, $mux
+			? static fn() : WebRtcPeer => new ExtRtcPeer($config, $port, $port, '127.0.0.1', true)
+			: static fn() : WebRtcPeer => new ExtRtcPeer($config));
 		$poll = static function() use ($transport) : void{ $transport->poll(); };
 		try{
 			$offer = hex2bin($this->read('OFFER ', $poll));
