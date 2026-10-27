@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace amber\nethernet\backend;
 
 use amber\nethernet\Channel;
+use amber\nethernet\ConnectionStats;
 use amber\nethernet\TransportConfig;
 use amber\nethernet\TransportException;
 use pmmp\webrtc\DataChannel;
@@ -214,6 +215,7 @@ final class ExtWebRtcPeer implements WebRtcPeer{
 	public function receiveFrame(Channel $channel) : ?string{
 		return $this->native(fn() => $this->channel($channel)->receive(), 'native_receive_failed');
 	}
+	public function getStats() : ?ConnectionStats{ return null; } // ext-webrtc has no transport stats
 	public function close() : void{
 		if($this->peer === null){
 			return;

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace amber\nethernet\backend;
 
 use amber\nethernet\Channel;
+use amber\nethernet\ConnectionStats;
 
 interface WebRtcPeer{
 	public function setRemoteOffer(string $sdp) : void;
@@ -25,5 +26,6 @@ interface WebRtcPeer{
 	public function sendFrame(Channel $channel, string $frame) : bool;
 	public function peekFrame(Channel $channel) : ?string;
 	public function receiveFrame(Channel $channel) : ?string;
+	public function getStats() : ?ConnectionStats;
 	public function close() : void;
 }

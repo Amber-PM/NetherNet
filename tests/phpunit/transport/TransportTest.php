@@ -8,6 +8,7 @@ use amber\nethernet\backend\WebRtcPeer;
 use amber\nethernet\Channel;
 use amber\nethernet\Connection;
 use amber\nethernet\ConnectionState;
+use amber\nethernet\ConnectionStats;
 use amber\nethernet\identity\ClientServerIdentityHandler;
 use amber\nethernet\identity\IdentityHandler;
 use amber\nethernet\identity\PeerIdentity;
@@ -60,6 +61,22 @@ final class TransportTest extends TestCase{
 		$connection->close();
 		self::assertSame(['answer', 'open', 'close'], $this->listener->events);
 		self::assertSame(1, $this->peer->closes);
+	}
+
+	public function testStatsComeFromTheBackendOnlyWhileOpen() : void{
+		$this->peer->stats = new ConnectionStats(42, 1000, 2000, 10, 20);
+		$connection = $this->open();
+		self::assertSame($this->peer->stats, $connection->getStats());
+		$connection->close();
+		self::assertNull($connection->getStats());
+	}
+
+	public function testStatsFailureClosesTheConnection() : void{
+		$connection = $this->open();
+		$this->peer->statsFailure = new TransportException('backend_error', 'stats unavailable');
+		self::assertNull($connection->getStats());
+		self::assertSame(ConnectionState::CLOSED, $connection->getState());
+		self::assertSame('backend_error', $this->listener->closed[0][1]);
 	}
 
 	public function testReliableFragmentOrderAndAcceptanceAfterLocalSend() : void{

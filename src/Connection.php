@@ -14,5 +14,6 @@ interface Connection{
 
 	/** @param \Closure(bool): void|null $accepted */
 	public function send(string $payload, Channel $channel = Channel::RELIABLE, bool $immediate = false, ?\Closure $accepted = null) : SendResult;
+	public function getStats() : ?ConnectionStats;
 	public function close(string $reason = 'local close') : void;
 }

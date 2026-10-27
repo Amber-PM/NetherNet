@@ -6,6 +6,7 @@ namespace amber\nethernet\tests\transport;
 
 use amber\nethernet\backend\WebRtcPeer;
 use amber\nethernet\Channel;
+use amber\nethernet\ConnectionStats;
 use amber\nethernet\TransportException;
 
 final class FakePeer implements WebRtcPeer{
@@ -22,6 +23,8 @@ final class FakePeer implements WebRtcPeer{
 	public ?\Throwable $closeFailure = null;
 	public ?string $remoteSdp = null;
 	public ?TransportException $failure = null;
+	public ?ConnectionStats $stats = null;
+	public ?TransportException $statsFailure = null;
 	/** @var list<array{Channel, string}> */
 	public array $sent = [];
 	/** @var array<string, list<string>> */
@@ -34,6 +37,10 @@ final class FakePeer implements WebRtcPeer{
 	public function getRemoteFingerprint() : ?string{ return $this->fingerprint; }
 	public function getState() : string{ return $this->state; }
 	public function getFailureState() : ?string{ return null; }
+	public function getStats() : ?ConnectionStats{
+		if($this->statsFailure !== null){ throw $this->statsFailure; }
+		return $this->stats;
+	}
 	public function createChannel(Channel $channel) : void{}
 	public function pollChannels() : array{ return []; }
 	public function isChannelOpen(Channel $channel) : bool{ return $this->open; }

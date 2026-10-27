@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace amber\nethernet\backend;
 
 use amber\nethernet\Channel;
+use amber\nethernet\ConnectionStats;
 use amber\nethernet\TransportConfig;
 use amber\nethernet\TransportException;
 use amber\rtc\ConnectionState;
@@ -33,7 +34,7 @@ final class ExtRtcPeer implements WebRtcPeer{
 			RtcRuntime::class => ['getApiVersion', 'getCapabilities'],
 			RtcException::class => [],
 			PeerConnectionOptions::class => ['create', 'setMaxMessageSize', 'setMaxReceiveQueueSize', 'setMaxReceiveQueueMessages', 'setMaxSendQueueSize', 'setMaxRemoteDescriptionSize', 'setMaxPendingDataChannels', 'setIceTcpEnabled', 'setPortRange', 'setBindAddress', 'setIceUdpMuxEnabled'],
-			PeerConnection::class => ['__construct', 'setRemoteOffer', 'setRemoteAnswer', 'getGatheringState', 'getLocalDescription', 'getState', 'getFailureState', 'getRemoteFingerprint', 'createDataChannel', 'pollDataChannels', 'close'],
+			PeerConnection::class => ['__construct', 'setRemoteOffer', 'setRemoteAnswer', 'getGatheringState', 'getLocalDescription', 'getState', 'getFailureState', 'getRemoteFingerprint', 'createDataChannel', 'pollDataChannels', 'getStats', 'close'],
 			DataChannelOptions::class => ['create', 'setUnordered', 'setMaxRetransmits'],
 			DataChannel::class => ['getLabel', 'getProtocol', 'isOpen', 'isClosed', 'isUnordered', 'getMaxRetransmits', 'getMaxPacketLifeTime', 'getMaxMessageSize', 'getBufferedAmount', 'getAvailableAmount', 'getQueuedMessageCount', 'send', 'peek', 'receive', 'close']
 		];
@@ -297,6 +298,14 @@ final class ExtRtcPeer implements WebRtcPeer{
 	}
 	public function receiveFrame(Channel $channel) : ?string{
 		return $this->native(fn() => $this->channel($channel)->receive(), 'native_receive_failed');
+	}
+	public function getStats() : ?ConnectionStats{
+		if($this->peer === null){
+			return null;
+		}
+		/** @var array{rttMs: ?int, bytesSent: int, bytesReceived: int, receiveQueueBytes: int, receiveQueueMessages: int, sendQueueBytes: int, receiveOverflowCount: int, sendRejectedCount: int} $stats */
+		$stats = $this->native(fn() => $this->peer()->getStats());
+		return new ConnectionStats($stats['rttMs'], $stats['bytesSent'], $stats['bytesReceived'], $stats['sendQueueBytes'], $stats['receiveQueueBytes']);
 	}
 	public function close() : void{
 		if($this->peer === null){

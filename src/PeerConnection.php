@@ -381,6 +381,16 @@ final class PeerConnection implements SignalingPeerConnection{
 		$this->terminate($code, $error->getMessage());
 	}
 
+	public function getStats() : ?ConnectionStats{
+		if($this->state !== ConnectionState::OPEN || $this->peer === null){ return null; }
+		try{
+			return $this->peer->getStats();
+		}catch(\Throwable $e){
+			$this->fail($e);
+			return null;
+		}
+	}
+
 	public function close(string $reason = 'local close') : void{ $this->terminate('local_close', $reason); }
 
 	private function terminate(string $code, string $reason) : void{

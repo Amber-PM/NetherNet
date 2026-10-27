@@ -530,6 +530,18 @@ final class ExtRtcPeerTest extends TestCase{
 		self::deliver($offer, $answer, Channel::RELIABLE, "advertised\x00");
 	}
 
+	public function testNativeStatsCountTrafficAndStopAfterClose() : void{
+		[$offer, $answer] = $this->pair();
+		self::deliver($offer, $answer, Channel::RELIABLE, "stats\x00");
+		self::assertGreaterThan(0, ($offer->getStats() ?? self::fail('Missing stats'))->bytesSent);
+		$stats = $answer->getStats() ?? self::fail('Missing stats');
+		self::assertGreaterThan(0, $stats->bytesReceived);
+		self::assertTrue($stats->rttMs === null || $stats->rttMs >= 0);
+		self::assertGreaterThanOrEqual(0, $stats->sendQueueBytes);
+		$answer->close();
+		self::assertNull($answer->getStats());
+	}
+
 	public function testUseAfterCloseAndRepeatedLifecycleDoNotLeak() : void{
 		for($i = 0; $i < 20; ++$i){
 			[$offer, $answer] = $this->pair();
