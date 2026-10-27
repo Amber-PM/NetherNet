@@ -46,6 +46,9 @@ $transport = new Transport($config, $identityHandler, $listener,
 // every peer shares one UDP port
 $transport = new Transport($config, $identityHandler, $listener,
 	static fn() => new ExtRtcPeer($config, 19133, 19133, $bindAddress, udpMux: true));
+// behind port forwarding (containers, hosting): also offer the public address
+$transport = new Transport($config, $identityHandler, $listener,
+	static fn() => new ExtRtcPeer($config, 19133, 19133, null, udpMux: true, advertisedAddress: '203.0.113.7'));
 ```
 
 - Bind addresses must be numeric and exist locally; ext-rtc rejects ranges
@@ -56,6 +59,10 @@ $transport = new Transport($config, $identityHandler, $listener,
 - On Windows, mux requires an explicit, non-wildcard bind address. With a wildcard
   bind the pinned libjuice can stall the next mux negotiation for about a minute
   after a mux peer closes. `ExtRtcPeer::assertMuxOptions()` checks this upfront.
+- An advertised address adds, after each local UDP host candidate of the same IP
+  family, a copy with that address and the same port. The local candidates stay,
+  so clients on the same network still connect directly. The forwarded public port
+  must equal the local ICE port, which a fixed mux port makes predictable.
 - Well-formed remote candidates the backend cannot use (TCP, mDNS hostnames,
   RTCP component 2) are dropped before negotiation; malformed candidates still
   fail it.

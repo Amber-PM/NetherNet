@@ -519,6 +519,17 @@ final class ExtRtcPeerTest extends TestCase{
 		self::assertSame(0, RtcRuntime::getStats()['activePeers']);
 	}
 
+	public function testAdvertisedAddressIsOfferedAndLocalConnectionStillWorks() : void{
+		$offer = $this->peer();
+		$answer = new ExtRtcPeer(new TransportConfig(), 0, 0, '127.0.0.1', false, '198.51.100.7');
+		$this->peers[] = $answer;
+		self::connect($offer, $answer);
+		$description = $answer->getLocalDescription() ?? self::fail('Missing answer');
+		self::assertMatchesRegularExpression('/^a=candidate:\S+ 1 udp \d+ 127\.0\.0\.1 (\d+) typ host/mi', $description);
+		self::assertMatchesRegularExpression('/^a=candidate:\S+a 1 udp \d+ 198\.51\.100\.7 \d+ typ host/mi', $description);
+		self::deliver($offer, $answer, Channel::RELIABLE, "advertised\x00");
+	}
+
 	public function testUseAfterCloseAndRepeatedLifecycleDoNotLeak() : void{
 		for($i = 0; $i < 20; ++$i){
 			[$offer, $answer] = $this->pair();

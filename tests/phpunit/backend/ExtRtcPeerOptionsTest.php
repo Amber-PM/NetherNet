@@ -81,4 +81,45 @@ final class ExtRtcPeerOptionsTest extends TestCase{
 		self::assertSame('', $errors);
 		self::assertSame("backend_unavailable\n", $output);
 	}
+
+	/** @return iterable<string, array{string}> */
+	public static function invalidAdvertisedAddresses() : iterable{
+		yield 'hostname' => ['example.com'];
+		yield 'empty' => [''];
+		yield 'with port' => ['203.0.113.7:19133'];
+		yield 'IPv4 wildcard' => ['0.0.0.0'];
+		yield 'IPv6 wildcard' => ['::'];
+	}
+
+	#[DataProvider('invalidAdvertisedAddresses')]
+	public function testInvalidAdvertisedAddressIsRejectedBeforeNativeConstruction(string $address) : void{
+		$this->expectException(\InvalidArgumentException::class);
+		new ExtRtcPeer(new TransportConfig(), 19133, 19133, null, false, $address);
+	}
+
+	public function testAdvertisedAddressFollowsEachHostCandidate() : void{
+		$sdp = "v=0\r\na=candidate:1 1 UDP 2122317823 172.18.0.5 19133 typ host\r\na=candidate:2 1 UDP 2122317567 10.0.0.9 19134 typ host generation 0\r\na=end-of-candidates\r\n";
+		self::assertSame(
+			"v=0\r\na=candidate:1 1 UDP 2122317823 172.18.0.5 19133 typ host\r\na=candidate:1a 1 UDP 2122317822 203.0.113.7 19133 typ host\r\n" .
+			"a=candidate:2 1 UDP 2122317567 10.0.0.9 19134 typ host generation 0\r\na=candidate:2a 1 UDP 2122317566 203.0.113.7 19134 typ host generation 0\r\na=end-of-candidates\r\n",
+			ExtRtcPeer::withAdvertisedCandidates($sdp, '203.0.113.7')
+		);
+	}
+
+	public function testAdvertisedAddressIsAddedOncePerPortAndFamily() : void{
+		$sdp = "a=candidate:1 1 UDP 100 172.18.0.5 19133 typ host\na=candidate:2 1 UDP 99 192.168.1.4 19133 typ host\na=candidate:3 1 UDP 98 fd00::5 19133 typ host\na=candidate:4 1 UDP 97 172.18.0.5 19135 typ srflx raddr 0.0.0.0 rport 0\na=candidate:5 2 UDP 96 172.18.0.5 19136 typ host";
+		self::assertSame(
+			"a=candidate:1 1 UDP 100 172.18.0.5 19133 typ host\na=candidate:1a 1 UDP 99 203.0.113.7 19133 typ host\na=candidate:2 1 UDP 99 192.168.1.4 19133 typ host\na=candidate:3 1 UDP 98 fd00::5 19133 typ host\na=candidate:4 1 UDP 97 172.18.0.5 19135 typ srflx raddr 0.0.0.0 rport 0\na=candidate:5 2 UDP 96 172.18.0.5 19136 typ host",
+			ExtRtcPeer::withAdvertisedCandidates($sdp, '203.0.113.7')
+		);
+		self::assertSame(
+			"a=candidate:3 1 UDP 98 fd00::5 19133 typ host\r\na=candidate:3a 1 UDP 97 2001:db8::7 19133 typ host",
+			ExtRtcPeer::withAdvertisedCandidates("a=candidate:3 1 UDP 98 fd00::5 19133 typ host", '2001:db8::7')
+		);
+	}
+
+	public function testAlreadyAdvertisedAddressIsNotDuplicated() : void{
+		$sdp = "a=candidate:1 1 UDP 100 203.0.113.7 19133 typ host\r\na=candidate:2 1 UDP 99 172.18.0.5 19133 typ host\r\n";
+		self::assertSame($sdp, ExtRtcPeer::withAdvertisedCandidates($sdp, '203.0.113.7'));
+	}
 }
