@@ -12,6 +12,8 @@ final class HttpServer{
 	private mixed $listener = null;
 	/** @var array<int, HttpSocket> */
 	private array $clients = [];
+	/** @var array<string, int> */
+	private array $connectionsByIp = [];
 	private bool $polling = false;
 	private bool $stopped = false;
 	private readonly string $address;
@@ -21,13 +23,17 @@ final class HttpServer{
 	/** @var int<1, 1048576> */
 	private readonly int $ioBytes;
 
-	/** @param \Closure(): float|null $clock */
+	/**
+	 * @param \Closure(): float|null $clock
+	 * @param \Closure(string): bool|null $admit
+	 */
 	public function __construct(
 		private readonly TransportConfig $config,
 		private readonly HttpSignaling $signaling,
 		string $bind = 'tcp://127.0.0.1:0',
 		int $ioBytes = 16384,
-		?\Closure $clock = null
+		?\Closure $clock = null,
+		private readonly ?\Closure $admit = null
 	){
 		if($ioBytes < 1 || $ioBytes > 1048576 || preg_match('~^tcp://([0-9.]+|\[[0-9a-fA-F:.]+\]):([0-9]{1,5})$~D', $bind, $parts) !== 1 ||
 			filter_var(trim($parts[1], '[]'), FILTER_VALIDATE_IP, $parts[1][0] === '[' ? FILTER_FLAG_IPV6 : FILTER_FLAG_IPV4) === false || (int) $parts[2] > 65535){
@@ -127,6 +133,8 @@ final class HttpServer{
 				if($peerName === false){ fclose($stream); continue; }
 				try{ $peerAddress = SignalingPeerAddress::fromSocketName($peerName); }
 				catch(\InvalidArgumentException){ fclose($stream); continue; }
+				// one address must not hold every slot and banned peers stop before parsing
+				if(($this->connectionsByIp[$peerAddress->ip] ?? 0) >= $this->config->maxHttpConnectionsPerIp || ($this->admit !== null && !($this->admit)($peerAddress->ip))){ fclose($stream); continue; }
 				$id = $this->signaling->open($peerAddress);
 			}catch(HttpException){
 				fclose($stream);
@@ -135,7 +143,8 @@ final class HttpServer{
 				fclose($stream);
 				throw $e;
 			}
-			$this->clients[$id] = new HttpSocket($stream, $this->now() + $this->config->httpHeaderTimeoutSeconds);
+			$this->clients[$id] = new HttpSocket($stream, $peerAddress->ip, $this->now() + $this->config->httpHeaderTimeoutSeconds);
+			$this->connectionsByIp[$peerAddress->ip] = ($this->connectionsByIp[$peerAddress->ip] ?? 0) + 1;
 		}
 	}
 
@@ -178,6 +187,7 @@ final class HttpServer{
 		$client = $this->clients[$id] ?? null;
 		if($client === null){ return; }
 		unset($this->clients[$id]);
+		if(--$this->connectionsByIp[$client->ip] === 0){ unset($this->connectionsByIp[$client->ip]); }
 		$client->output = '';
 		fclose($client->stream);
 		$this->signaling->cancel($id);

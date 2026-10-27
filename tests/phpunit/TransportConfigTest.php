@@ -18,7 +18,7 @@ final class TransportConfigTest extends TestCase{
 
 	/** @return iterable<string, array{array<string, int>}> */
 	public static function invalidLimits() : iterable{
-		foreach(['maxHttpHeaderBytes', 'maxSdpBytes', 'maxCandidates', 'maxIdentityBytes', 'maxNetworkIdBytes', 'maxPendingNegotiations', 'maxHttpConnections', 'maxConnections', 'maxMessageBytes', 'maxReceiveQueueBytes', 'maxReceiveQueueMessages', 'maxSendQueueBytes', 'maxPendingChannels', 'maxOutgoingQueueBytes', 'maxOutgoingQueueMessages', 'maxPayloadBytes', 'maxFragments', 'maxAggregateBytes', 'httpHeaderTimeoutSeconds', 'signalingTimeoutSeconds', 'connectTimeoutSeconds', 'assemblyTimeoutSeconds', 'peerPollMessages', 'peerPollBytes', 'globalPollMessages', 'globalPollBytes'] as $name){
+		foreach(['maxHttpHeaderBytes', 'maxSdpBytes', 'maxCandidates', 'maxIdentityBytes', 'maxNetworkIdBytes', 'maxPendingNegotiations', 'maxHttpConnections', 'maxHttpConnectionsPerIp', 'maxConnections', 'maxMessageBytes', 'maxReceiveQueueBytes', 'maxReceiveQueueMessages', 'maxSendQueueBytes', 'maxPendingChannels', 'maxOutgoingQueueBytes', 'maxOutgoingQueueMessages', 'maxPayloadBytes', 'maxFragments', 'maxAggregateBytes', 'httpHeaderTimeoutSeconds', 'signalingTimeoutSeconds', 'connectTimeoutSeconds', 'assemblyTimeoutSeconds', 'peerPollMessages', 'peerPollBytes', 'globalPollMessages', 'globalPollBytes'] as $name){
 			yield $name => [[$name => 0]];
 		}
 		yield 'header needs payload capacity' => [['maxMessageBytes' => 1]];

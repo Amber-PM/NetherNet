@@ -13,6 +13,7 @@ final class TransportConfig{
 		public readonly int $maxNetworkIdBytes = 256,
 		public readonly int $maxPendingNegotiations = 32,
 		public readonly int $maxHttpConnections = 64,
+		public readonly int $maxHttpConnectionsPerIp = 4,
 		public readonly int $maxConnections = 128,
 		public readonly int $maxMessageBytes = 262144,
 		public readonly int $maxReceiveQueueBytes = 4194304,

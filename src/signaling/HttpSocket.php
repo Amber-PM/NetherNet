@@ -12,5 +12,5 @@ final class HttpSocket{
 	public HttpState $state = HttpState::HEADERS;
 
 	/** @param resource $stream */
-	public function __construct(public readonly mixed $stream, public float $deadline){}
+	public function __construct(public readonly mixed $stream, public readonly string $ip, public float $deadline){}
 }

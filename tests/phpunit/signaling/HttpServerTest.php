@@ -42,13 +42,14 @@ final class HttpServerTest extends TestCase{
 	/**
 	 * @param \Closure(): float|null $clock
 	 * @param \Closure(): ServerMetadata|null $metadata
+	 * @param \Closure(string): bool|null $admit
 	 */
-	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null, string $bind = 'tcp://127.0.0.1:0') : void{
+	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null, string $bind = 'tcp://127.0.0.1:0', ?\Closure $admit = null) : void{
 		$config ??= new TransportConfig();
 		$this->http = new HttpSignaling($config, $metadata ?? static fn() => new ServerMetadata('Server', 12, 'custom', 'World', 0, 20, 0), $this->listener);
 		$this->transport = new Transport($config, new ClientServerIdentityHandler($this->fixture->verifier(), $this->fixture->server, $config, static fn() => 1000), $this->http, fn() : WebRtcPeer => $this->peer, $clock, static fn() => 1000);
 		$this->http->bind($this->transport);
-		$this->server = new HttpServer($config, $this->http, $bind, ioBytes: $ioBytes, clock: $clock);
+		$this->server = new HttpServer($config, $this->http, $bind, ioBytes: $ioBytes, clock: $clock, admit: $admit);
 	}
 
 	protected function tearDown() : void{
@@ -516,6 +517,42 @@ final class HttpServerTest extends TestCase{
 		self::assertSame(0, $this->server->getConnectionCount());
 		self::assertSame(HttpState::CLOSED, $this->http->getState(2));
 		self::assertSame('', $this->response($second));
+	}
+
+	public function testOneAddressCannotHoldEveryHttpSlot() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$this->make(new TransportConfig(maxHttpConnections: 8, maxHttpConnectionsPerIp: 2));
+		$first = $this->client();
+		$this->client();
+		$this->server->poll();
+		self::assertSame(2, $this->server->getConnectionCount());
+		self::assertSame('', $this->response($this->client()));
+		self::assertSame(2, $this->server->getConnectionCount());
+		stream_socket_shutdown($first, STREAM_SHUT_WR);
+		self::assertStringStartsWith('HTTP/1.1 400 Bad Request', $this->response($first));
+		$valid = $this->client();
+		$this->send($valid, "GET /v1/join HTTP/1.1\r\nHost: test\r\n\r\n");
+		self::assertStringStartsWith('HTTP/1.1 200 OK', $this->response($valid));
+	}
+
+	public function testRejectedAddressIsClosedBeforeSignaling() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$seen = [];
+		$allow = false;
+		$this->make(admit: static function(string $ip) use (&$seen, &$allow) : bool{
+			$seen[] = $ip;
+			return $allow;
+		});
+		self::assertSame('', $this->response($this->client()));
+		self::assertSame(['127.0.0.1'], $seen);
+		self::assertSame(0, $this->server->getConnectionCount());
+		self::assertSame(HttpState::CLOSED, $this->http->getState(1));
+		$allow = true;
+		$valid = $this->client();
+		$this->send($valid, "GET /v1/join HTTP/1.1\r\nHost: test\r\n\r\n");
+		self::assertStringStartsWith('HTTP/1.1 200 OK', $this->response($valid));
 	}
 
 	public function testPendingNegotiationLimitAndShutdownCancellation() : void{
