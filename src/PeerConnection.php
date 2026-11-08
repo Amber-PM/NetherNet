@@ -298,8 +298,9 @@ final class PeerConnection implements SignalingPeerConnection{
 				$frame = $this->codec->encodeUnreliable($payload, $capacity);
 				$sent = false;
 				if($frame !== null && $this->canWork(strlen($frame))){
-					$this->consume(strlen($frame));
 					$sent = $this->backend()->sendFrame($channel, $frame);
+					// a refused frame is not work, it must not cost other peers their turn
+					if($sent){ $this->consume(strlen($frame)); }
 				}
 			}else{
 				$frames = $this->codec->encode($payload, $capacity);
@@ -336,8 +337,8 @@ final class PeerConnection implements SignalingPeerConnection{
 				try{
 					$frame = $entry['frames']->current();
 					if(!$this->canWork(strlen($frame))){ break; }
-					$this->consume(strlen($frame));
 					if(!$this->backend()->sendFrame(Channel::RELIABLE, $frame)){ break; }
+					$this->consume(strlen($frame));
 					$entry['frames']->next();
 				}catch(\Throwable $e){
 					unset($entry, $frame);

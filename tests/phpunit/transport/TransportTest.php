@@ -403,6 +403,27 @@ final class TransportTest extends TestCase{
 		self::assertLessThan($baseline + 1024 * 1024, $observed->bytes);
 	}
 
+	public function testBlockedPeerDoesNotSpendTheSharedWorkBudget() : void{
+		$blocked = new FakePeer();
+		$blocked->blocked = true;
+		$healthy = new FakePeer();
+		$peers = [$blocked, $healthy];
+		$index = 0;
+		$this->transport = $this->makeTransport(new TransportConfig(globalPollMessages: 1), factory: function() use ($peers, &$index) : WebRtcPeer{ return $peers[$index++]; });
+		$offer = $this->fixture->offer(FakePeer::SDP);
+		$this->transport->accept('one', $offer);
+		$this->transport->accept('two', $offer);
+		for($i = 0; $i < 3; ++$i){ $this->transport->poll(); }
+		for($i = 0; $i < 8; ++$i){
+			$this->listener->connections[1]->send('out');
+			$this->listener->connections[2]->send('out');
+			$this->transport->poll();
+		}
+		self::assertSame([], $blocked->sent);
+		// a refused frame was never sent so it cannot cost another peer its turn
+		self::assertCount(8, $healthy->sent);
+	}
+
 	public function testGlobalBudgetRotationDoesNotLockEachPeerToOneDirection() : void{
 		$other = new FakePeer();
 		$peers = [$this->peer, $other];
