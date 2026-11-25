@@ -98,14 +98,15 @@ final class HttpServer{
 			$waitMicroseconds = min($waitMicroseconds, max(0, (int) (($client->deadline - $now) * 1_000_000)));
 		}
 		$except = null;
-		$selected = @stream_select($read, $write, $except, 0, $waitMicroseconds);
-		if($selected === false){ throw new \RuntimeException('HTTP socket selection failed'); }
-		if(in_array($this->listener, $read, true)){ $this->accept(); }
+		// select fails for descriptors above FD_SETSIZE, the sockets are nonblocking so try them all
+		$blind = @stream_select($read, $write, $except, 0, $waitMicroseconds) === false;
+		if($blind && $waitMicroseconds > 0){ usleep($waitMicroseconds); }
+		if($blind || in_array($this->listener, $read, true)){ $this->accept(); }
 		foreach($this->clients as $id => $client){
 			if($this->stopped){ break; }
 			$this->prepare($id, $client, $this->now());
 			if(!isset($this->clients[$id])){ continue; }
-			if($client->reading && in_array($client->stream, $read, true)){
+			if($client->reading && ($blind || in_array($client->stream, $read, true))){
 				$bytes = @fread($client->stream, $this->ioBytes);
 				if($bytes === false){ $this->drop($id); continue; }
 				if($bytes !== ''){ $this->signaling->receive($id, $bytes); }
@@ -116,7 +117,7 @@ final class HttpServer{
 			}
 			if($this->stopped){ continue; }
 			$this->prepare($id, $client, $this->now());
-			if(isset($this->clients[$id]) && in_array($client->stream, $write, true)){ $this->write($id, $client); }
+			if(isset($this->clients[$id]) && ($blind ? $client->output !== '' : in_array($client->stream, $write, true))){ $this->write($id, $client); }
 		}
 	}
 

@@ -721,4 +721,28 @@ final class HttpServerTest extends TestCase{
 		self::assertSame(HttpState::CLOSED, $this->http->getState(1));
 		self::assertSame(1, $this->peer->closes);
 	}
+
+	public function testServesWhenDescriptorsExceedSelectSetSize() : void{
+		if(PHP_OS_FAMILY === 'Windows' || !function_exists('posix_getrlimit')){ self::markTestSkipped('needs posix descriptor limits'); }
+		$limits = posix_getrlimit();
+		if($limits === false){ self::markTestSkipped('descriptor limits are unavailable'); }
+		if(($limits['soft openfiles'] === 'unlimited' ? PHP_INT_MAX : $limits['soft openfiles']) < 2048){ self::markTestSkipped('soft descriptor limit is below 2048'); }
+		$this->server->stop();
+		$this->transport->stop();
+		// select() only sees descriptors below 1024
+		for($i = 0; $i < 1100; ++$i){
+			$held = fopen('/dev/null', 'r');
+			self::assertNotFalse($held);
+			$this->sockets[] = $held;
+		}
+		$this->make();
+		$socket = $this->client();
+		fwrite($socket, "GET /v1/join HTTP/1.1\r\nHost: test\r\n\r\n");
+		self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($socket));
+		self::assertSame(0, $this->server->getConnectionCount());
+		// a blind poll still honours its wait
+		$started = hrtime(true);
+		$this->server->poll(10000);
+		self::assertGreaterThanOrEqual(9_000_000, hrtime(true) - $started);
+	}
 }
