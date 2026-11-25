@@ -43,13 +43,14 @@ final class HttpServerTest extends TestCase{
 	 * @param \Closure(): float|null $clock
 	 * @param \Closure(): ServerMetadata|null $metadata
 	 * @param \Closure(string): bool|null $admit
+	 * @param list<string> $trustedProxies
 	 */
-	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null, string $bind = 'tcp://127.0.0.1:0', ?\Closure $admit = null) : void{
+	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null, string $bind = 'tcp://127.0.0.1:0', ?\Closure $admit = null, array $trustedProxies = []) : void{
 		$config ??= new TransportConfig();
 		$this->http = new HttpSignaling($config, $metadata ?? static fn() => new ServerMetadata('Server', 12, 'custom', 'World', 0, 20, 0), $this->listener);
 		$this->transport = new Transport($config, new ClientServerIdentityHandler($this->fixture->verifier(), $this->fixture->server, $config, static fn() => 1000), $this->http, fn() : WebRtcPeer => $this->peer, $clock, static fn() => 1000);
 		$this->http->bind($this->transport);
-		$this->server = new HttpServer($config, $this->http, $bind, ioBytes: $ioBytes, clock: $clock, admit: $admit);
+		$this->server = new HttpServer($config, $this->http, $bind, ioBytes: $ioBytes, clock: $clock, admit: $admit, trustedProxies: $trustedProxies);
 	}
 
 	protected function tearDown() : void{
@@ -744,5 +745,59 @@ final class HttpServerTest extends TestCase{
 		$started = hrtime(true);
 		$this->server->poll(10000);
 		self::assertGreaterThanOrEqual(9_000_000, hrtime(true) - $started);
+	}
+
+	public function testTrustedProxyHeaderSetsThePlayerAddress() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$seen = [];
+		$this->make(new TransportConfig(maxHttpConnectionsPerIp: 1), admit: static function(string $ip) use (&$seen) : bool{ $seen[] = $ip; return $ip !== '198.51.100.66'; }, trustedProxies: ['127.0.0.0/8']);
+		$get = "GET /v1/join HTTP/1.1\r\nHost: test\r\n\r\n";
+		// more than the per ip limit of 1 at once, all through the same proxy
+		$first = $this->client();
+		$second = $this->client();
+		fwrite($first, "PROXY TCP4 203.0.113.9 10.0.0.1 51000 19132\r\n" . $get);
+		fwrite($second, "\r\n\r\n\0\r\nQUIT\n\x21\x11\x00\x0c" . inet_pton('203.0.113.10') . inet_pton('10.0.0.1') . pack('nn', 51001, 19132));
+		$this->server->poll(1000);
+		fwrite($second, $get);
+		self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($first));
+		self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($second));
+		self::assertSame(['203.0.113.9', '203.0.113.10'], $seen);
+		// the admission check sees the player, not the proxy
+		$banned = $this->client();
+		fwrite($banned, "PROXY TCP4 198.51.100.66 10.0.0.1 51000 19132\r\n" . $get);
+		self::assertSame('', $this->response($banned));
+		// a trusted proxy that sends no header is not served
+		$bare = $this->client();
+		fwrite($bare, $get);
+		self::assertSame('', $this->response($bare));
+		self::assertSame(0, $this->server->getConnectionCount());
+	}
+
+	public function testUntrustedPeerCannotClaimAnAddress() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$seen = [];
+		$this->make(admit: static function(string $ip) use (&$seen) : bool{ $seen[] = $ip; return true; }, trustedProxies: ['10.9.9.9']);
+		$socket = $this->client();
+		fwrite($socket, "PROXY TCP4 203.0.113.9 10.0.0.1 51000 19132\r\nGET /v1/join HTTP/1.1\r\nHost: test\r\n\r\n");
+		self::assertStringStartsWith("HTTP/1.1 400 ", $this->response($socket));
+		self::assertSame(['127.0.0.1'], $seen);
+	}
+
+
+	public function testSilentProxyConnectionTimesOut() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$now = 0.0;
+		$this->make(clock: static function() use (&$now) : float{ return $now; }, trustedProxies: ['127.0.0.1']);
+		$socket = $this->client();
+		fwrite($socket, 'PROXY TCP4 203.0.113.9');
+		$this->server->poll(1000);
+		$this->server->poll(1000);
+		self::assertSame(1, $this->server->getConnectionCount());
+		$now = 6.0;
+		self::assertSame('', $this->response($socket));
+		self::assertSame(0, $this->server->getConnectionCount());
 	}
 }

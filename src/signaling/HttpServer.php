@@ -14,6 +14,9 @@ final class HttpServer{
 	private array $clients = [];
 	/** @var array<string, int> */
 	private array $connectionsByIp = [];
+	/** @var array<int, array{stream: resource, deadline: float, address: SignalingPeerAddress}> */
+	private array $proxied = [];
+	private int $nextProxied = 0;
 	private bool $polling = false;
 	private bool $stopped = false;
 	private readonly string $address;
@@ -26,6 +29,7 @@ final class HttpServer{
 	/**
 	 * @param \Closure(): float|null $clock
 	 * @param \Closure(string): bool|null $admit
+	 * @param list<string> $trustedProxies
 	 */
 	public function __construct(
 		private readonly TransportConfig $config,
@@ -33,8 +37,10 @@ final class HttpServer{
 		string $bind = 'tcp://127.0.0.1:0',
 		int $ioBytes = 16384,
 		?\Closure $clock = null,
-		private readonly ?\Closure $admit = null
+		private readonly ?\Closure $admit = null,
+		private readonly array $trustedProxies = []
 	){
+		ProxyProtocol::assertNetworks($trustedProxies);
 		if($ioBytes < 1 || $ioBytes > 1048576 || preg_match('~^tcp://([0-9.]+|\[[0-9a-fA-F:.]+\]):([0-9]{1,5})$~D', $bind, $parts) !== 1 ||
 			filter_var(trim($parts[1], '[]'), FILTER_VALIDATE_IP, $parts[1][0] === '[' ? FILTER_FLAG_IPV6 : FILTER_FLAG_IPV4) === false || (int) $parts[2] > 65535){
 			throw new \InvalidArgumentException('HTTP requires a numeric TCP bind and an I/O budget of 1..1048576 bytes');
@@ -65,7 +71,7 @@ final class HttpServer{
 	}
 
 	public function getAddress() : string{ return $this->address; }
-	public function getConnectionCount() : int{ return count($this->clients); }
+	public function getConnectionCount() : int{ return count($this->clients) + count($this->proxied); }
 	public function getBufferedBytes() : int{
 		$bytes = 0;
 		foreach($this->clients as $client){ $bytes += strlen($client->output); }
@@ -92,6 +98,10 @@ final class HttpServer{
 		if($this->stopped || $this->listener === null){ return; }
 		$read = [$this->listener];
 		$write = [];
+		foreach($this->proxied as $entry){
+			$read[] = $entry['stream'];
+			$waitMicroseconds = min($waitMicroseconds, max(0, (int) (($entry['deadline'] - $now) * 1_000_000)));
+		}
 		foreach($this->clients as $client){
 			if($client->reading){ $read[] = $client->stream; }
 			if($client->output !== ''){ $write[] = $client->stream; }
@@ -102,6 +112,10 @@ final class HttpServer{
 		$blind = @stream_select($read, $write, $except, 0, $waitMicroseconds) === false;
 		if($blind && $waitMicroseconds > 0){ usleep($waitMicroseconds); }
 		if($blind || in_array($this->listener, $read, true)){ $this->accept(); }
+		foreach($this->proxied as $key => $entry){
+			if($this->stopped){ break; }
+			if($blind || in_array($entry['stream'], $read, true) || $this->now() >= $entry['deadline']){ $this->readProxyHeader($key); }
+		}
 		foreach($this->clients as $id => $client){
 			if($this->stopped){ break; }
 			$this->prepare($id, $client, $this->now());
@@ -125,7 +139,7 @@ final class HttpServer{
 		for($i = 0; $i < 16 && !$this->stopped && $this->listener !== null; ++$i){
 			$stream = @stream_socket_accept($this->listener, 0);
 			if($stream === false){ break; }
-			if(count($this->clients) >= $this->config->maxHttpConnections){ fclose($stream); continue; }
+			if(count($this->clients) + count($this->proxied) >= $this->config->maxHttpConnections){ fclose($stream); continue; }
 			try{
 				if(!stream_set_blocking($stream, false)){
 					throw new \RuntimeException('HTTP client could not become nonblocking');
@@ -134,19 +148,63 @@ final class HttpServer{
 				if($peerName === false){ fclose($stream); continue; }
 				try{ $peerAddress = SignalingPeerAddress::fromSocketName($peerName); }
 				catch(\InvalidArgumentException){ fclose($stream); continue; }
-				// one address must not hold every slot and banned peers stop before parsing
-				if(($this->connectionsByIp[$peerAddress->ip] ?? 0) >= $this->config->maxHttpConnectionsPerIp || ($this->admit !== null && !($this->admit)($peerAddress->ip))){ fclose($stream); continue; }
-				$id = $this->signaling->open($peerAddress);
-			}catch(HttpException){
-				fclose($stream);
-				continue;
+				// a trusted proxy names the real player address first
+				if(ProxyProtocol::matches($peerAddress->ip, $this->trustedProxies)){
+					$this->proxied[$this->nextProxied++] = ['stream' => $stream, 'deadline' => $this->now() + $this->config->httpHeaderTimeoutSeconds, 'address' => $peerAddress];
+					continue;
+				}
 			}catch(\Throwable $e){
 				fclose($stream);
 				throw $e;
 			}
-			$this->clients[$id] = new HttpSocket($stream, $peerAddress->ip, $this->now() + $this->config->httpHeaderTimeoutSeconds);
-			$this->connectionsByIp[$peerAddress->ip] = ($this->connectionsByIp[$peerAddress->ip] ?? 0) + 1;
+			$this->admitClient($stream, $peerAddress, $this->now() + $this->config->httpHeaderTimeoutSeconds);
 		}
+	}
+
+	/** @param resource $stream */
+	private function admitClient(mixed $stream, SignalingPeerAddress $peerAddress, float $deadline) : void{
+		try{
+			// one address must not hold every slot and banned peers stop before parsing
+			if(($this->connectionsByIp[$peerAddress->ip] ?? 0) >= $this->config->maxHttpConnectionsPerIp || ($this->admit !== null && !($this->admit)($peerAddress->ip))){ $this->reject($stream); return; }
+			$id = $this->signaling->open($peerAddress);
+		}catch(HttpException){
+			$this->reject($stream);
+			return;
+		}catch(\Throwable $e){
+			$this->reject($stream);
+			throw $e;
+		}
+		$this->clients[$id] = new HttpSocket($stream, $peerAddress->ip, $deadline);
+		$this->connectionsByIp[$peerAddress->ip] = ($this->connectionsByIp[$peerAddress->ip] ?? 0) + 1;
+	}
+
+	private function readProxyHeader(int $key) : void{
+		$entry = $this->proxied[$key];
+		// peek so nothing after the header leaves the socket
+		$bytes = @stream_socket_recvfrom($entry['stream'], ProxyProtocol::MAX_BYTES, STREAM_PEEK);
+		try{
+			if($bytes === '' || $this->now() >= $entry['deadline']){ throw new \InvalidArgumentException('PROXY header never arrived'); }
+			if($bytes === false){ return; }
+			$header = ProxyProtocol::parse($bytes);
+			if($header === null){
+				if(strlen($bytes) >= ProxyProtocol::MAX_BYTES){ throw new \InvalidArgumentException('PROXY header exceeds limit'); }
+				return;
+			}
+			if(strlen((string) @stream_socket_recvfrom($entry['stream'], $header[1])) !== $header[1]){ throw new \InvalidArgumentException('PROXY header could not be consumed'); }
+		}catch(\InvalidArgumentException){
+			unset($this->proxied[$key]);
+			$this->reject($entry['stream']);
+			return;
+		}
+		unset($this->proxied[$key]);
+		$this->admitClient($entry['stream'], $header[0] ?? $entry['address'], $entry['deadline']);
+	}
+
+	/** @param resource $stream */
+	private function reject(mixed $stream) : void{
+		// unread bytes would turn the close into a reset
+		@stream_socket_recvfrom($stream, 65536);
+		fclose($stream);
 	}
 
 	private function prepare(int $id, HttpSocket $client, float $now) : void{
@@ -198,6 +256,8 @@ final class HttpServer{
 		if($this->stopped){ return; }
 		$this->stopped = true;
 		if($this->listener !== null){ fclose($this->listener); $this->listener = null; }
+		foreach($this->proxied as $entry){ fclose($entry['stream']); }
+		$this->proxied = [];
 		$error = null;
 		foreach(array_keys($this->clients) as $id){
 			try{ $this->drop($id); }catch(\Throwable $e){ $error ??= $e; }

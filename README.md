@@ -34,6 +34,7 @@ $transport = new Transport($config, $identityHandler, $listener,
 - **One port** for everyone with `udpMux: true` and `begin === end`. On Windows it needs an explicit bind address.
 - **Behind port forwarding** pass `advertisedAddress: 'public ip'`, or `'ip:public-port:local-port'` when the forwarded port differs. A list of entries is accepted.
 - **STUN** pass `stunServer: 'host:port'` to gather a public candidate. An unreachable server delays gathering past the default signaling timeout.
+- **Behind a TCP proxy** pass `trustedProxies: ['10.0.0.5', '172.16.0.0/12']` to `HttpServer`. Connections from those addresses must start with a PROXY protocol v1 or v2 header, and the player address comes from it.
 - `Connection::send()` returning `ACCEPTED` means local admission, not delivery.
 - `Connection::getStats()` returns RTT and byte counters while open.
 
