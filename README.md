@@ -35,6 +35,7 @@ $transport = new Transport($config, $identityHandler, $listener,
 - **Behind port forwarding** pass `advertisedAddress: 'public ip'`, or `'ip:public-port:local-port'` when the forwarded port differs. A list of entries is accepted.
 - **STUN** pass `stunServer: 'host:port'` to gather a public candidate. An unreachable server delays gathering past the default signaling timeout.
 - **Behind a TCP proxy** pass `trustedProxies: ['10.0.0.5', '172.16.0.0/12']` to `HttpServer`. Connections from those addresses must start with a PROXY protocol v1 or v2 header, and the player address comes from it.
+- **HTTPS** pass `tls: new TlsConfig($certificateFile, $privateKeyFile)` to `HttpServer`. TLS 1.2 and 1.3 are accepted on the same port as plain HTTP, `required: true` refuses plain HTTP, and the files are read on every handshake so renewals need no restart.
 - `Connection::send()` returning `ACCEPTED` means local admission, not delivery.
 - `Connection::getStats()` returns RTT and byte counters while open.
 

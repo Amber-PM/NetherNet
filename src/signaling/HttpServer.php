@@ -17,6 +17,8 @@ final class HttpServer{
 	/** @var array<int, array{stream: resource, deadline: float, address: SignalingPeerAddress}> */
 	private array $proxied = [];
 	private int $nextProxied = 0;
+	/** @var array{https: int, http: int, tlsRefused: int, tlsFailed: int} */
+	private array $schemes = ['https' => 0, 'http' => 0, 'tlsRefused' => 0, 'tlsFailed' => 0];
 	private bool $polling = false;
 	private bool $stopped = false;
 	private readonly string $address;
@@ -38,7 +40,8 @@ final class HttpServer{
 		int $ioBytes = 16384,
 		?\Closure $clock = null,
 		private readonly ?\Closure $admit = null,
-		private readonly array $trustedProxies = []
+		private readonly array $trustedProxies = [],
+		private readonly ?TlsConfig $tls = null
 	){
 		ProxyProtocol::assertNetworks($trustedProxies);
 		if($ioBytes < 1 || $ioBytes > 1048576 || preg_match('~^tcp://([0-9.]+|\[[0-9a-fA-F:.]+\]):([0-9]{1,5})$~D', $bind, $parts) !== 1 ||
@@ -48,7 +51,8 @@ final class HttpServer{
 		$this->ioBytes = $ioBytes;
 		$this->clock = $clock ?? static fn() => hrtime(true) / 1_000_000_000;
 		$this->now();
-		$stream = @stream_socket_server($bind, $code, $error, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN);
+		// accepted sockets inherit the tls options, the handshake starts only when a client opens with one
+		$stream = @stream_socket_server($bind, $code, $error, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, stream_context_create($tls !== null ? ['ssl' => $tls->contextOptions()] : []));
 		if($stream === false){ throw new \RuntimeException('HTTP listener bind failed (' . $code . ')'); }
 		try{
 			if(!stream_set_blocking($stream, false)){ throw new \RuntimeException('HTTP listener could not become nonblocking'); }
@@ -71,6 +75,8 @@ final class HttpServer{
 	}
 
 	public function getAddress() : string{ return $this->address; }
+	/** @return array{https: int, http: int, tlsRefused: int, tlsFailed: int} */
+	public function getSchemeCounts() : array{ return $this->schemes; }
 	public function getConnectionCount() : int{ return count($this->clients) + count($this->proxied); }
 	public function getBufferedBytes() : int{
 		$bytes = 0;
@@ -120,9 +126,16 @@ final class HttpServer{
 			if($this->stopped){ break; }
 			$this->prepare($id, $client, $this->now());
 			if(!isset($this->clients[$id])){ continue; }
-			if($client->reading && ($blind || in_array($client->stream, $read, true))){
+			if($client->tls === null && !$this->secure($id, $client)){ continue; }
+			// openssl may hold decrypted bytes that select cannot see
+			if($client->reading && ($blind || $client->tls === true || in_array($client->stream, $read, true))){
 				$bytes = @fread($client->stream, $this->ioBytes);
 				if($bytes === false){ $this->drop($id); continue; }
+				if($bytes !== '' && !$client->counted){
+					$client->counted = true;
+					// clients try tls first and fall back, so a refused hello is normal without a certificate
+					++$this->schemes[$client->tls === true ? 'https' : ($bytes[0] === "\x16" ? 'tlsRefused' : 'http')];
+				}
 				if($bytes !== ''){ $this->signaling->receive($id, $bytes); }
 				elseif(feof($client->stream)){
 					$client->reading = false;
@@ -131,7 +144,7 @@ final class HttpServer{
 			}
 			if($this->stopped){ continue; }
 			$this->prepare($id, $client, $this->now());
-			if(isset($this->clients[$id]) && ($blind ? $client->output !== '' : in_array($client->stream, $write, true))){ $this->write($id, $client); }
+			if(isset($this->clients[$id]) && ($blind || $client->tls === true ? $client->output !== '' : in_array($client->stream, $write, true))){ $this->write($id, $client); }
 		}
 	}
 
@@ -174,13 +187,46 @@ final class HttpServer{
 			$this->reject($stream);
 			throw $e;
 		}
-		$this->clients[$id] = new HttpSocket($stream, $peerAddress->ip, $deadline);
+		$client = new HttpSocket($stream, $peerAddress->ip, $deadline);
+		if($this->tls !== null){ $client->tls = null; }
+		$this->clients[$id] = $client;
 		$this->connectionsByIp[$peerAddress->ip] = ($this->connectionsByIp[$peerAddress->ip] ?? 0) + 1;
+	}
+
+	private function secure(int $id, HttpSocket $client) : bool{
+		if($this->tls === null){ return true; }
+		// timed out before the handshake finished, no channel exists to answer on
+		if(!$client->reading){ $this->drop($id); return false; }
+		if(!$client->handshaking){
+			// a tls record starts with 0x16, http starts with a letter
+			$first = @stream_socket_recvfrom($client->stream, 1, STREAM_PEEK);
+			if($first === false){ return false; }
+			if($first === '' || ($first !== "\x16" && $this->tls->required)){
+				// unread bytes would turn the close into a reset
+				@stream_socket_recvfrom($client->stream, 65536);
+				$this->drop($id);
+				return false;
+			}
+			if($first !== "\x16"){
+				$client->tls = false;
+				return true;
+			}
+			$client->handshaking = true;
+		}
+		$result = @stream_socket_enable_crypto($client->stream, true, TlsConfig::method());
+		if($result === false){
+			$this->drop($id);
+			return false;
+		}
+		if($result !== true){ return false; }
+		$client->handshaking = false;
+		$client->tls = true;
+		return true;
 	}
 
 	private function readProxyHeader(int $key) : void{
 		$entry = $this->proxied[$key];
-		// peek so nothing after the header leaves the socket
+		// peek so nothing after the header leaves the socket, a tls handshake may follow
 		$bytes = @stream_socket_recvfrom($entry['stream'], ProxyProtocol::MAX_BYTES, STREAM_PEEK);
 		try{
 			if($bytes === '' || $this->now() >= $entry['deadline']){ throw new \InvalidArgumentException('PROXY header never arrived'); }
@@ -246,6 +292,9 @@ final class HttpServer{
 		$client = $this->clients[$id] ?? null;
 		if($client === null){ return; }
 		unset($this->clients[$id]);
+		// clients that dislike the certificate often abandon the hello and retry over http
+		// or finish the handshake, check the certificate afterwards and leave without a request
+		if($client->handshaking || ($client->tls === true && !$client->counted)){ ++$this->schemes['tlsFailed']; }
 		if(--$this->connectionsByIp[$client->ip] === 0){ unset($this->connectionsByIp[$client->ip]); }
 		$client->output = '';
 		fclose($client->stream);

@@ -13,6 +13,7 @@ use amber\nethernet\signaling\HttpState;
 use amber\nethernet\signaling\HttpServer;
 use amber\nethernet\signaling\HttpSignaling;
 use amber\nethernet\signaling\ServerMetadata;
+use amber\nethernet\signaling\TlsConfig;
 use amber\nethernet\tests\identity\IdentityFixture;
 use amber\nethernet\tests\transport\FakePeer;
 use amber\nethernet\tests\transport\RecordingListener;
@@ -31,6 +32,8 @@ final class HttpServerTest extends TestCase{
 	private float $now = 0.0;
 	/** @var list<resource> */
 	private array $sockets = [];
+	/** @var list<string> */
+	private array $temporary = [];
 
 	protected function setUp() : void{
 		$this->fixture = new IdentityFixture();
@@ -45,18 +48,22 @@ final class HttpServerTest extends TestCase{
 	 * @param \Closure(string): bool|null $admit
 	 * @param list<string> $trustedProxies
 	 */
-	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null, string $bind = 'tcp://127.0.0.1:0', ?\Closure $admit = null, array $trustedProxies = []) : void{
+	private function make(?TransportConfig $config = null, int $ioBytes = 16384, ?\Closure $clock = null, ?\Closure $metadata = null, string $bind = 'tcp://127.0.0.1:0', ?\Closure $admit = null, array $trustedProxies = [], ?TlsConfig $tls = null) : void{
 		$config ??= new TransportConfig();
 		$this->http = new HttpSignaling($config, $metadata ?? static fn() => new ServerMetadata('Server', 12, 'custom', 'World', 0, 20, 0), $this->listener);
 		$this->transport = new Transport($config, new ClientServerIdentityHandler($this->fixture->verifier(), $this->fixture->server, $config, static fn() => 1000), $this->http, fn() : WebRtcPeer => $this->peer, $clock, static fn() => 1000);
 		$this->http->bind($this->transport);
-		$this->server = new HttpServer($config, $this->http, $bind, ioBytes: $ioBytes, clock: $clock, admit: $admit, trustedProxies: $trustedProxies);
+		$this->server = new HttpServer($config, $this->http, $bind, ioBytes: $ioBytes, clock: $clock, admit: $admit, trustedProxies: $trustedProxies, tls: $tls);
 	}
 
 	protected function tearDown() : void{
 		if(isset($this->server)){ $this->server->stop(); }
 		if(isset($this->transport)){ $this->transport->stop(); }
 		foreach($this->sockets as $socket){ if(is_resource($socket)){ fclose($socket); } }
+		foreach($this->temporary as $directory){
+			foreach(glob($directory . '/*') ?: [] as $file){ unlink($file); }
+			rmdir($directory);
+		}
 	}
 
 	/** @return resource */
@@ -785,7 +792,6 @@ final class HttpServerTest extends TestCase{
 		self::assertSame(['127.0.0.1'], $seen);
 	}
 
-
 	public function testSilentProxyConnectionTimesOut() : void{
 		$this->server->stop();
 		$this->transport->stop();
@@ -799,5 +805,215 @@ final class HttpServerTest extends TestCase{
 		$now = 6.0;
 		self::assertSame('', $this->response($socket));
 		self::assertSame(0, $this->server->getConnectionCount());
+	}
+
+	/** @return array{string, string} */
+	private function certificate(string $name = 'play.example.test', int $days = 30, ?\OpenSSLAsymmetricKey $signWith = null) : array{
+		$config = ['config' => dirname(__DIR__) . '/identity/openssl.cnf'];
+		$key = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1'] + $config);
+		self::assertNotFalse($key);
+		$request = openssl_csr_new(['commonName' => $name], $key, $config);
+		self::assertNotFalse($request);
+		$certificate = openssl_csr_sign($request, null, $signWith ?? $key, $days, $config, random_int(1, PHP_INT_MAX));
+		self::assertNotFalse($certificate);
+		self::assertTrue(openssl_x509_export($certificate, $certificatePem));
+		self::assertTrue(openssl_pkey_export($key, $keyPem, null, $config));
+		$directory = sys_get_temp_dir() . '/nethernet-tls-' . bin2hex(random_bytes(6));
+		mkdir($directory);
+		file_put_contents($directory . '/cert.pem', $certificatePem);
+		file_put_contents($directory . '/key.pem', $keyPem);
+		$this->temporary[] = $directory;
+		return [$directory . '/cert.pem', $directory . '/key.pem'];
+	}
+
+	/** @return resource */
+	private function tlsClient(bool $expectFailure = false){
+		$context = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'capture_peer_cert' => true]]);
+		$socket = stream_socket_client('tcp://' . $this->server->getAddress(), $code, $error, 1, STREAM_CLIENT_CONNECT, $context);
+		self::assertNotFalse($socket);
+		self::assertTrue(stream_set_blocking($socket, false));
+		$this->sockets[] = $socket;
+		$deadline = hrtime(true) + 3_000_000_000;
+		do{
+			$result = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT);
+			$this->server->poll(1000);
+		}while($result === 0 && hrtime(true) < $deadline);
+		self::assertSame(!$expectFailure, $result === true);
+		return $socket;
+	}
+
+	private const GET = "GET /v1/join HTTP/1.1\r\nHost: test\r\n\r\n";
+
+	public function testTlsAndPlainHttpShareThePort() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		[$certificate, $key] = $this->certificate();
+		$tls = new TlsConfig($certificate, $key);
+		self::assertSame(['play.example.test'], $tls->names);
+		$this->make(tls: $tls);
+		$secure = $this->tlsClient();
+		$this->send($secure, self::GET);
+		self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($secure));
+		$plain = $this->client();
+		fwrite($plain, self::GET);
+		self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($plain));
+		self::assertSame(0, $this->server->getConnectionCount());
+		self::assertSame(['https' => 1, 'http' => 1, 'tlsRefused' => 0, 'tlsFailed' => 0], $this->server->getSchemeCounts());
+	}
+
+	public function testTlsHelloWithoutCertificateIsRefusedAtOnceAndCounted() : void{
+		$socket = $this->client();
+		fwrite($socket, "\x16\x03\x01\x00\x05hello");
+		self::assertStringStartsWith("HTTP/1.1 400 ", $this->response($socket));
+		self::assertSame(['https' => 0, 'http' => 0, 'tlsRefused' => 1, 'tlsFailed' => 0], $this->server->getSchemeCounts());
+	}
+
+	public function testRequiredTlsRefusesPlainHttpAndOldProtocols() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		[$certificate, $key] = $this->certificate();
+		$this->make(tls: new TlsConfig($certificate, $key, true));
+		$plain = $this->client();
+		fwrite($plain, self::GET);
+		self::assertSame('', $this->response($plain));
+		$secure = $this->tlsClient();
+		$this->send($secure, self::GET);
+		self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($secure));
+		// tls 1.1 and older are not offered
+		$context = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'security_level' => 0]]);
+		$old = stream_socket_client('tcp://' . $this->server->getAddress(), $code, $error, 1, STREAM_CLIENT_CONNECT, $context);
+		self::assertNotFalse($old);
+		$this->sockets[] = $old;
+		stream_set_blocking($old, false);
+		$deadline = hrtime(true) + 3_000_000_000;
+		do{
+			$result = @stream_socket_enable_crypto($old, true, STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT);
+			$this->server->poll(1000);
+		}while($result === 0 && hrtime(true) < $deadline);
+		self::assertNotTrue($result);
+	}
+
+	public function testBrokenAndStalledHandshakesAreDropped() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$now = 0.0;
+		[$certificate, $key] = $this->certificate();
+		$this->make(clock: static function() use (&$now) : float{ return $now; }, tls: new TlsConfig($certificate, $key, now: time()));
+		$garbage = $this->client();
+		fwrite($garbage, "\x16\x03\x01\x00\x05hello");
+		// at most a tls alert comes back, never http
+		self::assertStringNotContainsString('HTTP/', $this->response($garbage));
+		self::assertSame(0, $this->server->getConnectionCount());
+		self::assertSame(1, $this->server->getSchemeCounts()['tlsFailed']);
+		$stalled = $this->client();
+		fwrite($stalled, "\x16\x03\x01");
+		$this->server->poll(1000);
+		$this->server->poll(1000);
+		self::assertSame(1, $this->server->getConnectionCount());
+		$now = 6.0;
+		$this->response($stalled);
+		self::assertSame(0, $this->server->getConnectionCount());
+	}
+
+	public function testClientRejectingTheCertificateCountsAsFailedHandshake() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$now = 0.0;
+		[$certificate, $key] = $this->certificate();
+		$this->make(clock: static function() use (&$now) : float{ return $now; }, tls: new TlsConfig($certificate, $key, now: time()));
+		// a real client verifies the chain and walks away from a self-signed certificate
+		$context = stream_context_create(['ssl' => ['verify_peer' => true, 'verify_peer_name' => true, 'peer_name' => 'play.example.test']]);
+		$socket = stream_socket_client('tcp://' . $this->server->getAddress(), $code, $error, 1, STREAM_CLIENT_CONNECT, $context);
+		self::assertNotFalse($socket);
+		$this->sockets[] = $socket;
+		stream_set_blocking($socket, false);
+		$deadline = hrtime(true) + 3_000_000_000;
+		do{
+			$result = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT);
+			$this->server->poll(1000);
+		}while($result === 0 && hrtime(true) < $deadline);
+		self::assertFalse($result);
+		fclose($socket);
+		for($i = 0; $i < 5; ++$i){ $this->server->poll(1000); }
+		$now = 6.0;
+		$this->server->poll(1000);
+		self::assertSame(0, $this->server->getConnectionCount());
+		self::assertSame(['https' => 0, 'http' => 0, 'tlsRefused' => 0, 'tlsFailed' => 1], $this->server->getSchemeCounts());
+		// a stalled hello that times out is a failed handshake as well
+		$stalled = $this->client();
+		fwrite($stalled, "\x16\x03\x01");
+		$this->server->poll(1000);
+		$now = 12.0;
+		$this->response($stalled);
+		self::assertSame(2, $this->server->getSchemeCounts()['tlsFailed']);
+		// some clients finish the handshake, check the certificate afterwards and leave without a request
+		$checked = $this->tlsClient();
+		fclose($checked);
+		for($i = 0; $i < 5; ++$i){ $this->server->poll(1000); }
+		$now = 100.0;
+		$this->server->poll(1000);
+		self::assertSame(0, $this->server->getConnectionCount());
+		self::assertSame(['https' => 0, 'http' => 0, 'tlsRefused' => 0, 'tlsFailed' => 3], $this->server->getSchemeCounts());
+	}
+
+	public function testRenewedCertificateIsServedWithoutRestart() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		[$certificate, $key] = $this->certificate();
+		$this->make(tls: new TlsConfig($certificate, $key));
+		$fingerprint = function() : string{
+			$socket = $this->tlsClient();
+			$peer = stream_context_get_options($socket)['ssl']['peer_certificate'] ?? null;
+			self::assertInstanceOf(\OpenSSLCertificate::class, $peer);
+			$this->send($socket, self::GET);
+			self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($socket));
+			return (string) openssl_x509_fingerprint($peer, 'sha256');
+		};
+		$first = $fingerprint();
+		[$renewedCertificate, $renewedKey] = $this->certificate();
+		// same order a renewal tool would not guarantee, so swap both before the next handshake
+		rename($renewedKey, $key);
+		rename($renewedCertificate, $certificate);
+		$second = $fingerprint();
+		self::assertNotSame($first, $second);
+	}
+
+	public function testProxyHeaderIsReadBeforeTheTlsHandshake() : void{
+		$this->server->stop();
+		$this->transport->stop();
+		$seen = [];
+		[$certificate, $key] = $this->certificate();
+		$this->make(admit: static function(string $ip) use (&$seen) : bool{ $seen[] = $ip; return true; }, trustedProxies: ['127.0.0.1'], tls: new TlsConfig($certificate, $key, true));
+		$context = stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]);
+		$socket = stream_socket_client('tcp://' . $this->server->getAddress(), $code, $error, 1, STREAM_CLIENT_CONNECT, $context);
+		self::assertNotFalse($socket);
+		$this->sockets[] = $socket;
+		fwrite($socket, "PROXY TCP4 203.0.113.9 10.0.0.1 51000 19132\r\n");
+		stream_set_blocking($socket, false);
+		$deadline = hrtime(true) + 3_000_000_000;
+		do{
+			$result = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT);
+			$this->server->poll(1000);
+		}while($result === 0 && hrtime(true) < $deadline);
+		self::assertTrue($result);
+		$this->send($socket, self::GET);
+		self::assertStringStartsWith("HTTP/1.1 200 OK\r\n", $this->response($socket));
+		self::assertSame(['203.0.113.9'], $seen);
+	}
+
+	public function testTlsConfigRejectsUnusableMaterial() : void{
+		[$certificate, $key] = $this->certificate();
+		[, $otherKey] = $this->certificate();
+		foreach([
+			'mismatched key' => fn() => new TlsConfig($certificate, $otherKey),
+			'missing file' => fn() => new TlsConfig($certificate . '.missing', $key),
+			'key as certificate' => fn() => new TlsConfig($key, $key),
+			'expired' => fn() => new TlsConfig($certificate, $key, now: time() + 40 * 86400),
+			'not valid yet' => fn() => new TlsConfig($certificate, $key, now: time() - 86400),
+			'stream wrapper' => fn() => new TlsConfig('file://' . $certificate, $key)
+		] as $case => $construct){
+			try{ $construct(); self::fail('accepted ' . $case); }catch(\InvalidArgumentException){ $this->addToAssertionCount(1); }
+		}
+		self::assertGreaterThan(time(), (new TlsConfig($certificate, $key))->expiresAt);
 	}
 }
