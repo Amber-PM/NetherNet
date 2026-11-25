@@ -530,6 +530,19 @@ final class ExtRtcPeerTest extends TestCase{
 		self::deliver($offer, $answer, Channel::RELIABLE, "advertised\x00");
 	}
 
+	public function testMappedAddressListAndStunStillConnectLocally() : void{
+		$offer = $this->peer();
+		// the stun name cannot resolve, gathering must still finish with the host candidates
+		$answer = new ExtRtcPeer(new TransportConfig(), 24611, 24611, '127.0.0.1', false, ['198.51.100.7:31000:24611', '203.0.113.9'], 'stun.invalid:3478');
+		$this->peers[] = $answer;
+		self::connect($offer, $answer);
+		$description = $answer->getLocalDescription() ?? self::fail('Missing answer');
+		self::assertMatchesRegularExpression('/^a=candidate:\S+ 1 udp \d+ 127\.0\.0\.1 24611 typ host/mi', $description);
+		self::assertMatchesRegularExpression('/^a=candidate:\S+a 1 udp \d+ 198\.51\.100\.7 31000 typ host/mi', $description);
+		self::assertMatchesRegularExpression('/^a=candidate:\S+b 1 udp \d+ 203\.0\.113\.9 24611 typ host/mi', $description);
+		self::deliver($offer, $answer, Channel::RELIABLE, "mapped\x00");
+	}
+
 	public function testNativeStatsCountTrafficAndStopAfterClose() : void{
 		[$offer, $answer] = $this->pair();
 		self::deliver($offer, $answer, Channel::RELIABLE, "stats\x00");

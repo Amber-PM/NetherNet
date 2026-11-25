@@ -122,4 +122,53 @@ final class ExtRtcPeerOptionsTest extends TestCase{
 		$sdp = "a=candidate:1 1 UDP 100 203.0.113.7 19133 typ host\r\na=candidate:2 1 UDP 99 172.18.0.5 19133 typ host\r\n";
 		self::assertSame($sdp, ExtRtcPeer::withAdvertisedCandidates($sdp, '203.0.113.7'));
 	}
+
+	public function testMappedAdvertisedAddressRewritesOnlyItsLocalPort() : void{
+		$sdp = "a=candidate:1 1 UDP 100 172.18.0.5 20000 typ host\r\na=candidate:2 1 UDP 99 172.18.0.5 20001 typ host\r\n";
+		self::assertSame(
+			"a=candidate:1 1 UDP 100 172.18.0.5 20000 typ host\r\na=candidate:1a 1 UDP 99 203.0.113.7 31000 typ host\r\na=candidate:2 1 UDP 99 172.18.0.5 20001 typ host\r\n",
+			ExtRtcPeer::withAdvertisedCandidates($sdp, '203.0.113.7', 31000, 20000)
+		);
+	}
+
+	public function testSeveralAdvertisedAddressesGetDistinctCandidates() : void{
+		$sdp = "a=candidate:1 1 UDP 100 172.18.0.5 20000 typ host\r\n";
+		$sdp = ExtRtcPeer::withAdvertisedCandidates($sdp, '203.0.113.7', null, null, 0);
+		self::assertSame(
+			"a=candidate:1 1 UDP 100 172.18.0.5 20000 typ host\r\na=candidate:1b 1 UDP 98 198.51.100.9 20000 typ host\r\na=candidate:1a 1 UDP 99 203.0.113.7 20000 typ host\r\n",
+			ExtRtcPeer::withAdvertisedCandidates($sdp, '198.51.100.9', null, null, 1)
+		);
+	}
+
+	public function testAdvertisedAddressEntriesAreParsed() : void{
+		self::assertSame(['address' => '203.0.113.7', 'publicPort' => null, 'localPort' => null], ExtRtcPeer::parseAdvertisedAddress('203.0.113.7'));
+		self::assertSame(['address' => '203.0.113.7', 'publicPort' => 31000, 'localPort' => 20000], ExtRtcPeer::parseAdvertisedAddress('203.0.113.7:31000:20000'));
+		self::assertSame(['address' => '2001:db8::7', 'publicPort' => 31000, 'localPort' => 20000], ExtRtcPeer::parseAdvertisedAddress('[2001:db8::7]:31000:20000'));
+		self::assertSame(['address' => '2001:db8::7', 'publicPort' => null, 'localPort' => null], ExtRtcPeer::parseAdvertisedAddress('2001:db8::7'));
+	}
+
+	/** @return iterable<string, array{string}> */
+	public static function invalidAdvertisedEntries() : iterable{
+		yield 'hostname' => ['example.com'];
+		yield 'one port' => ['203.0.113.7:31000'];
+		yield 'zero port' => ['203.0.113.7:0:20000'];
+		yield 'port above maximum' => ['203.0.113.7:65536:20000'];
+		yield 'wildcard' => ['0.0.0.0:31000:20000'];
+		yield 'unbracketed ipv6 with ports' => ['2001:db8::7:31000:20000x'];
+	}
+
+	#[DataProvider('invalidAdvertisedEntries')]
+	public function testRejectsInvalidAdvertisedEntries(string $entry) : void{
+		$this->expectException(\InvalidArgumentException::class);
+		ExtRtcPeer::parseAdvertisedAddress($entry);
+	}
+
+	public function testStunServerIsParsed() : void{
+		self::assertSame(['stun.example.com', 3478], ExtRtcPeer::parseStunServer('stun.example.com'));
+		self::assertSame(['stun.example.com', 19302], ExtRtcPeer::parseStunServer('stun:stun.example.com:19302'));
+		self::assertSame(['2001:db8::1', 3478], ExtRtcPeer::parseStunServer('[2001:db8::1]'));
+		foreach(['', 'host:0', 'host:70000', 'bad host', 'turn:host', '[nope]'] as $invalid){
+			try{ ExtRtcPeer::parseStunServer($invalid); self::fail('accepted ' . $invalid); }catch(\InvalidArgumentException){ $this->addToAssertionCount(1); }
+		}
+	}
 }

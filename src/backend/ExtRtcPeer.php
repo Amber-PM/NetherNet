@@ -12,6 +12,7 @@ use amber\rtc\ConnectionState;
 use amber\rtc\DataChannel;
 use amber\rtc\DataChannelOptions;
 use amber\rtc\GatheringState;
+use amber\rtc\IceServer;
 use amber\rtc\PeerConnection;
 use amber\rtc\PeerConnectionOptions;
 use amber\rtc\RtcException;
@@ -22,7 +23,8 @@ final class ExtRtcPeer implements WebRtcPeer{
 	/** @var array<string, DataChannel> */
 	private array $channels = [];
 	private ?string $failureState = null;
-	private ?string $advertisedAddress = null;
+	/** @var list<array{address: string, publicPort: int|null, localPort: int|null}> */
+	private array $advertised = [];
 
 	private function __clone(){}
 
@@ -33,7 +35,8 @@ final class ExtRtcPeer implements WebRtcPeer{
 		$required = [
 			RtcRuntime::class => ['getApiVersion', 'getCapabilities'],
 			RtcException::class => [],
-			PeerConnectionOptions::class => ['create', 'setMaxMessageSize', 'setMaxReceiveQueueSize', 'setMaxReceiveQueueMessages', 'setMaxSendQueueSize', 'setMaxRemoteDescriptionSize', 'setMaxPendingDataChannels', 'setIceTcpEnabled', 'setPortRange', 'setBindAddress', 'setIceUdpMuxEnabled'],
+			PeerConnectionOptions::class => ['create', 'setMaxMessageSize', 'setMaxReceiveQueueSize', 'setMaxReceiveQueueMessages', 'setMaxSendQueueSize', 'setMaxRemoteDescriptionSize', 'setMaxPendingDataChannels', 'setIceTcpEnabled', 'setPortRange', 'setBindAddress', 'setIceUdpMuxEnabled', 'setIceServers'],
+			IceServer::class => ['stun'],
 			PeerConnection::class => ['__construct', 'setRemoteOffer', 'setRemoteAnswer', 'getGatheringState', 'getLocalDescription', 'getState', 'getFailureState', 'getRemoteFingerprint', 'createDataChannel', 'pollDataChannels', 'getStats', 'close'],
 			DataChannelOptions::class => ['create', 'setUnordered', 'setMaxRetransmits'],
 			DataChannel::class => ['getLabel', 'getProtocol', 'isOpen', 'isClosed', 'isUnordered', 'getMaxRetransmits', 'getMaxPacketLifeTime', 'getMaxMessageSize', 'getBufferedAmount', 'getAvailableAmount', 'getQueuedMessageCount', 'send', 'peek', 'receive', 'close']
@@ -68,22 +71,23 @@ final class ExtRtcPeer implements WebRtcPeer{
 		}
 	}
 
-	public function __construct(private readonly TransportConfig $config, int $icePortBegin = 0, int $icePortEnd = 0, ?string $bindAddress = null, bool $udpMux = false, ?string $advertisedAddress = null){
+	/** @param string|list<string>|null $advertisedAddress */
+	public function __construct(private readonly TransportConfig $config, int $icePortBegin = 0, int $icePortEnd = 0, ?string $bindAddress = null, bool $udpMux = false, string|array|null $advertisedAddress = null, ?string $stunServer = null){
 		if(($icePortBegin !== 0 || $icePortEnd !== 0) && ($icePortBegin < 1 || $icePortEnd < $icePortBegin || $icePortEnd > 65535)){
 			throw new \InvalidArgumentException('ICE ports must both be zero, or an ordered range between 1 and 65535');
 		}
 		if($bindAddress !== null && filter_var($bindAddress, FILTER_VALIDATE_IP) === false){
 			throw new \InvalidArgumentException('ICE bind address must be a numeric IPv4 or IPv6 address');
 		}
-		if($advertisedAddress !== null){
-			self::assertAdvertisedAddress($advertisedAddress);
-			$this->advertisedAddress = $advertisedAddress;
+		foreach((array) $advertisedAddress as $entry){
+			$this->advertised[] = self::parseAdvertisedAddress($entry);
 		}
+		$stun = $stunServer !== null ? self::parseStunServer($stunServer) : null;
 		if($udpMux){
 			self::assertMuxOptions($icePortBegin, $icePortEnd, $bindAddress, PHP_OS_FAMILY === 'Windows');
 		}
 		self::assertAvailable();
-		$this->peer = $this->native(function() use ($icePortBegin, $icePortEnd, $bindAddress, $udpMux) : PeerConnection{
+		$this->peer = $this->native(function() use ($icePortBegin, $icePortEnd, $bindAddress, $udpMux, $stun) : PeerConnection{
 			$options = PeerConnectionOptions::create()
 				->setMaxMessageSize($this->config->maxMessageBytes)
 				->setMaxReceiveQueueSize($this->config->maxReceiveQueueBytes)
@@ -96,6 +100,9 @@ final class ExtRtcPeer implements WebRtcPeer{
 				->setIceUdpMuxEnabled($udpMux);
 			if($icePortBegin !== 0){
 				$options->setPortRange($icePortBegin, $icePortEnd);
+			}
+			if($stun !== null){
+				$options->setIceServers(IceServer::stun($stun[0], $stun[1]));
 			}
 			return new PeerConnection($options);
 		});
@@ -122,9 +129,45 @@ final class ExtRtcPeer implements WebRtcPeer{
 		}
 	}
 
+	/**
+	 * @return array{address: string, publicPort: int|null, localPort: int|null}
+	 * @throws \InvalidArgumentException
+	 */
+	public static function parseAdvertisedAddress(string $entry) : array{
+		$publicPort = $localPort = null;
+		$address = $entry;
+		// ip, ip:public:local or [ipv6]:public:local
+		if(preg_match('/^(?:\[([0-9a-fA-F:.]+)\]|([0-9.]+)):([0-9]{1,5}):([0-9]{1,5})$/D', $entry, $parts) === 1){
+			$address = $parts[1] !== '' ? $parts[1] : $parts[2];
+			$publicPort = (int) $parts[3];
+			$localPort = (int) $parts[4];
+			if($publicPort < 1 || $publicPort > 65535 || $localPort < 1 || $localPort > 65535){
+				throw new \InvalidArgumentException('Advertised ports must be between 1 and 65535');
+			}
+		}
+		self::assertAdvertisedAddress($address);
+		return ['address' => $address, 'publicPort' => $publicPort, 'localPort' => $localPort];
+	}
+
+	/**
+	 * @return array{string, int}
+	 * @throws \InvalidArgumentException
+	 */
+	public static function parseStunServer(string $server) : array{
+		if(preg_match('/^(?:stun:)?(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]{1,253})(?::([0-9]{1,5}))?$/D', $server, $parts) !== 1){
+			throw new \InvalidArgumentException('STUN server must be host or host:port');
+		}
+		$port = isset($parts[2]) ? (int) $parts[2] : 3478;
+		$host = trim($parts[1], '[]');
+		if($port < 1 || $port > 65535 || ($parts[1][0] === '[' && filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false)){
+			throw new \InvalidArgumentException('STUN server must be host or host:port');
+		}
+		return [$host, $port];
+	}
+
 	// a server behind port forwarding only sees its private address so the answer also offers the public one
 	// the private candidate stays for clients on the same network
-	public static function withAdvertisedCandidates(string $sdp, string $address) : string{
+	public static function withAdvertisedCandidates(string $sdp, string $address, ?int $publicPort = null, ?int $localPort = null, int $index = 0) : string{
 		$ipv6 = str_contains($address, ':');
 		$offered = [];
 		preg_match_all('/^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ host/mi', $sdp, $existing, PREG_SET_ORDER);
@@ -133,13 +176,19 @@ final class ExtRtcPeer implements WebRtcPeer{
 				$offered[$port] = true;
 			}
 		}
-		$result = preg_replace_callback('/^a=candidate:(\S+) 1 (udp) (\d+) (\S+) (\d+) typ host([^\r\n]*)(\r?\n|$)/mi', static function(array $match) use ($address, $ipv6, &$offered) : string{
+		$suffix = chr(ord('a') + $index % 26);
+		$result = preg_replace_callback('/^a=candidate:(\S+) 1 (udp) (\d+) (\S+) (\d+) typ host([^\r\n]*)(\r?\n|$)/mi', static function(array $match) use ($address, $ipv6, $publicPort, $localPort, $index, $suffix, &$offered) : string{
 			[$line, $foundation, $transport, $priority, $candidateAddress, $port, $rest, $end] = $match;
-			if(isset($offered[$port]) || filter_var($candidateAddress, FILTER_VALIDATE_IP) === false || str_contains($candidateAddress, ':') !== $ipv6){
+			// a mapped entry only covers its own local port
+			if($localPort !== null && (int) $port !== $localPort){
 				return $line;
 			}
-			$offered[$port] = true;
-			$copy = 'a=candidate:' . substr($foundation, 0, 31) . 'a 1 ' . $transport . ' ' . max(1, (int) $priority - 1) . ' ' . $address . ' ' . $port . ' typ host' . $rest;
+			$advertisedPort = (string) ($publicPort ?? $port);
+			if(isset($offered[$advertisedPort]) || filter_var($candidateAddress, FILTER_VALIDATE_IP) === false || str_contains($candidateAddress, ':') !== $ipv6){
+				return $line;
+			}
+			$offered[$advertisedPort] = true;
+			$copy = 'a=candidate:' . substr($foundation, 0, 31) . $suffix . ' 1 ' . $transport . ' ' . max(1, (int) $priority - 1 - $index) . ' ' . $address . ' ' . $advertisedPort . ' typ host' . $rest;
 			return $line . ($end === '' ? "\r\n" . $copy : $copy . $end);
 		}, $sdp);
 		return $result ?? throw new TransportException('negotiation_failed', 'Local candidates could not be advertised');
@@ -193,7 +242,13 @@ final class ExtRtcPeer implements WebRtcPeer{
 	}
 	public function getLocalDescription() : ?string{
 		$sdp = $this->native(fn() => $this->peer()->getLocalDescription());
-		return $sdp === null || $this->advertisedAddress === null ? $sdp : self::withAdvertisedCandidates($sdp, $this->advertisedAddress);
+		if($sdp === null){
+			return null;
+		}
+		foreach($this->advertised as $index => $entry){
+			$sdp = self::withAdvertisedCandidates($sdp, $entry['address'], $entry['publicPort'], $entry['localPort'], $index);
+		}
+		return $sdp;
 	}
 	public function getRemoteFingerprint() : ?string{
 		return $this->native(fn() => $this->peer()->getRemoteFingerprint());

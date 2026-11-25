@@ -32,7 +32,8 @@ $transport = new Transport($config, $identityHandler, $listener,
 
 - **Port range** `20000, 20127` gives each player its own UDP port.
 - **One port** for everyone with `udpMux: true` and `begin === end`. On Windows it needs an explicit bind address.
-- **Behind port forwarding** pass `advertisedAddress: 'public ip'`. The forwarded port must match the local one.
+- **Behind port forwarding** pass `advertisedAddress: 'public ip'`, or `'ip:public-port:local-port'` when the forwarded port differs. A list of entries is accepted.
+- **STUN** pass `stunServer: 'host:port'` to gather a public candidate. An unreachable server delays gathering past the default signaling timeout.
 - `Connection::send()` returning `ACCEPTED` means local admission, not delivery.
 - `Connection::getStats()` returns RTT and byte counters while open.
 
