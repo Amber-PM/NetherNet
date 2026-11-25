@@ -231,4 +231,21 @@ final class CallbackIsolationTest extends TestCase{
 		self::assertCount(1, $this->listener->closed);
 		$this->assertReleased();
 	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('closeTargets')]
+	public function testNativeCleanupErrorDoesNotSkipOtherPeersInThePoll(bool $firstFails) : void{
+		[$a, $b] = $this->open();
+		[$broken, $healthy] = $firstFails ? [$this->first, $this->second] : [$this->second, $this->first];
+		$broken->state = 'FAILED';
+		$broken->closeFailure = new TransportException('native_close_failed', 'native fault');
+		$healthy->incoming[Channel::RELIABLE->name][] = "\x00served";
+		try{ $this->transport->poll(); self::fail('Native cleanup error was hidden'); }
+		catch(\amber\nethernet\internal\TransportCleanupException $e){ self::assertSame($broken->closeFailure, $e->getPrevious()); }
+		self::assertSame(['served'], array_column($this->listener->payloads, 1));
+		self::assertSame(ConnectionState::OPEN, ($firstFails ? $b : $a)->getState());
+		self::assertCount(1, $this->listener->closed);
+		$healthy->state = 'CLOSED';
+		$this->transport->poll();
+		$this->assertReleased();
+	}
 }

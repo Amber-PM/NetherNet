@@ -9,6 +9,7 @@ use amber\nethernet\backend\WebRtcPeer;
 use amber\nethernet\identity\IdentityHandler;
 use amber\nethernet\identity\SdpIdentity;
 use amber\nethernet\internal\TransportBudget;
+use amber\nethernet\internal\TransportCleanupException;
 
 final class Transport{
 	/** @var array<int, PeerConnection> */
@@ -106,9 +107,13 @@ final class Transport{
 	/** @param list<int> $ids */
 	private function pollConnections(array $ids, int $start, float $now) : void{
 		$count = count($ids);
+		$cleanupError = null;
 		for($offset = 0; $offset < $count && !$this->stopped; ++$offset){
-			($this->connections[$ids[($start + $offset) % $count]] ?? null)?->poll($now);
+			// one peer's native cleanup fault must not cost the others their turn
+			try{ ($this->connections[$ids[($start + $offset) % $count]] ?? null)?->poll($now); }
+			catch(TransportCleanupException $e){ $cleanupError ??= $e; }
 		}
+		if($cleanupError !== null){ throw $cleanupError; }
 	}
 
 	public function close(int $id, string $reason = 'local close') : void{
