@@ -173,8 +173,11 @@ final class PeerConnection implements SignalingPeerConnection{
 			return null;
 		}
 		$peer = $this->backend();
-		if($peer->getFailureState() !== null || in_array($peer->getState(), ['FAILED', 'DISCONNECTED', 'CLOSED'], true)){
-			throw new TransportException('backend_failed', 'Native peer failed or disconnected');
+		$failure = $peer->getFailureState();
+		$native = $peer->getState();
+		if($failure !== null || in_array($native, ['FAILED', 'DISCONNECTED', 'CLOSED'], true)){
+			// failed is a lost path, disconnected or closed is the remote ending the session
+			throw new TransportException('backend_failed', 'Native peer state ' . ($failure ?? $native));
 		}
 		if($this->state === ConnectionState::GATHERING){
 			if(!$peer->isGatheringComplete()){ return null; }
